@@ -12,10 +12,11 @@ import {
 } from "./config/index.js";
 import { registerAgentWebhookTarget, registerWecomWebhookTarget } from "./monitor.js";
 import type { ResolvedWecomAccount, WecomConfig } from "./types/index.js";
+import { WEBHOOK_PATHS } from "./types/constants.js";
 
 type AccountRouteRegistryItem = {
   botPaths: string[];
-  agentPath?: string;
+  agentPaths: string[];
 };
 
 const accountRouteRegistry = new Map<string, AccountRouteRegistryItem>();
@@ -41,7 +42,7 @@ function logRegisteredRouteSummary(
       const routes = accountRouteRegistry.get(accountId);
       if (!routes) return undefined;
       const botText = routes.botPaths.length > 0 ? routes.botPaths.join(", ") : "未启用";
-      const agentText = routes.agentPath ?? "未启用";
+      const agentText = routes.agentPaths.length > 0 ? routes.agentPaths.join(", ") : "未启用";
       return `accountId=${accountId}（Bot: ${botText}；Agent: ${agentText}）`;
     })
     .filter((entry): entry is string => Boolean(entry));
@@ -72,6 +73,30 @@ function waitForAbortSignal(abortSignal: AbortSignal): Promise<void> {
     };
     abortSignal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+function uniquePaths(paths: string[]): string[] {
+  return Array.from(new Set(paths.map((path) => path.trim()).filter(Boolean)));
+}
+
+function resolveBotRegistrationPaths(params: { accountId: string; matrixMode: boolean }): string[] {
+  if (params.matrixMode) {
+    return uniquePaths([
+      `${WEBHOOK_PATHS.BOT_PLUGIN}/${params.accountId}`,
+      `${WEBHOOK_PATHS.BOT_ALT}/${params.accountId}`,
+    ]);
+  }
+  return uniquePaths([WEBHOOK_PATHS.BOT_PLUGIN, WEBHOOK_PATHS.BOT, WEBHOOK_PATHS.BOT_ALT]);
+}
+
+function resolveAgentRegistrationPaths(params: { accountId: string; matrixMode: boolean }): string[] {
+  if (params.matrixMode) {
+    return uniquePaths([
+      `${WEBHOOK_PATHS.AGENT_PLUGIN}/${params.accountId}`,
+      `${WEBHOOK_PATHS.AGENT}/${params.accountId}`,
+    ]);
+  }
+  return uniquePaths([WEBHOOK_PATHS.AGENT_PLUGIN, WEBHOOK_PATHS.AGENT]);
 }
 
 /**
@@ -129,12 +154,13 @@ export async function monitorWecomProvider(
 
   const unregisters: Array<() => void> = [];
   const botPaths: string[] = [];
-  let agentPath: string | undefined;
+  const agentPaths: string[] = [];
   try {
     if (bot && botConfigured) {
-      const paths = matrixMode
-        ? [`/wecom/bot/${account.accountId}`]
-        : ["/wecom", "/wecom/bot"];
+      const paths = resolveBotRegistrationPaths({
+        accountId: account.accountId,
+        matrixMode,
+      });
       for (const path of paths) {
         unregisters.push(
           registerWecomWebhookTarget({
@@ -154,20 +180,25 @@ export async function monitorWecomProvider(
     }
 
     if (agent && agentConfigured) {
-      const path = matrixMode ? `/wecom/agent/${account.accountId}` : "/wecom/agent";
-      unregisters.push(
-        registerAgentWebhookTarget({
-          agent,
-          config: cfg,
-          runtime: ctx.runtime,
-          path,
-        }),
-      );
-      agentPath = path;
-      ctx.log?.info(`[${account.accountId}] wecom agent webhook registered at ${path}`);
+      const paths = resolveAgentRegistrationPaths({
+        accountId: account.accountId,
+        matrixMode,
+      });
+      for (const path of paths) {
+        unregisters.push(
+          registerAgentWebhookTarget({
+            agent,
+            config: cfg,
+            runtime: ctx.runtime,
+            path,
+          }),
+        );
+      }
+      agentPaths.push(...paths);
+      ctx.log?.info(`[${account.accountId}] wecom agent webhook registered at ${paths.join(", ")}`);
     }
 
-    accountRouteRegistry.set(account.accountId, { botPaths, agentPath });
+    accountRouteRegistry.set(account.accountId, { botPaths, agentPaths });
     const shouldLogSummary =
       expectedRouteSummaryAccountIds.length <= 1 ||
       expectedRouteSummaryAccountIds.every((accountId) => accountRouteRegistry.has(accountId));
@@ -180,8 +211,8 @@ export async function monitorWecomProvider(
       running: true,
       configured: true,
       webhookPath: botConfigured
-        ? (matrixMode ? `/wecom/bot/${account.accountId}` : "/wecom/bot")
-        : (matrixMode ? `/wecom/agent/${account.accountId}` : "/wecom/agent"),
+        ? (botPaths[0] ?? WEBHOOK_PATHS.BOT_PLUGIN)
+        : (agentPaths[0] ?? WEBHOOK_PATHS.AGENT_PLUGIN),
       lastStartAt: Date.now(),
     });
 

@@ -19,6 +19,7 @@ import type { ResolvedWecomAccount } from "./types/index.js";
 import { monitorWecomProvider } from "./gateway-monitor.js";
 import { wecomOnboardingAdapter } from "./onboarding.js";
 import { wecomOutbound } from "./outbound.js";
+import { WEBHOOK_PATHS } from "./types/constants.js";
 
 const meta = {
   id: "wecom",
@@ -108,10 +109,10 @@ export const wecomPlugin: ChannelPlugin<ResolvedWecomAccount> = {
         enabled: account.enabled,
         configured: account.configured && !conflict,
         webhookPath: account.bot?.config
-          ? (matrixMode ? `/wecom/bot/${account.accountId}` : "/wecom/bot")
+          ? (matrixMode ? `${WEBHOOK_PATHS.BOT_PLUGIN}/${account.accountId}` : WEBHOOK_PATHS.BOT_PLUGIN)
           : account.agent?.config
-            ? (matrixMode ? `/wecom/agent/${account.accountId}` : "/wecom/agent")
-            : "/wecom",
+            ? (matrixMode ? `${WEBHOOK_PATHS.AGENT_PLUGIN}/${account.accountId}` : WEBHOOK_PATHS.AGENT_PLUGIN)
+            : WEBHOOK_PATHS.BOT_PLUGIN,
       };
     },
     resolveAllowFrom: ({ cfg, accountId }) => {
@@ -176,10 +177,14 @@ export const wecomPlugin: ChannelPlugin<ResolvedWecomAccount> = {
         enabled: account.enabled,
         configured: account.configured && !conflict,
         webhookPath: account.bot?.config
-          ? (account.accountId === DEFAULT_ACCOUNT_ID ? "/wecom/bot" : `/wecom/bot/${account.accountId}`)
+          ? (account.accountId === DEFAULT_ACCOUNT_ID
+              ? WEBHOOK_PATHS.BOT_PLUGIN
+              : `${WEBHOOK_PATHS.BOT_PLUGIN}/${account.accountId}`)
           : account.agent?.config
-            ? (account.accountId === DEFAULT_ACCOUNT_ID ? "/wecom/agent" : `/wecom/agent/${account.accountId}`)
-            : "/wecom",
+            ? (account.accountId === DEFAULT_ACCOUNT_ID
+                ? WEBHOOK_PATHS.AGENT_PLUGIN
+                : `${WEBHOOK_PATHS.AGENT_PLUGIN}/${account.accountId}`)
+            : WEBHOOK_PATHS.BOT_PLUGIN,
         running: runtime?.running ?? false,
         lastStartAt: runtime?.lastStartAt ?? null,
         lastStopAt: runtime?.lastStopAt ?? null,

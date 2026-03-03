@@ -4,12 +4,16 @@
 
 /** 固定 Webhook 路径 */
 export const WEBHOOK_PATHS = {
-    /** Bot 模式 (智能体) - 兼容原有路径 */
+    /** Bot 模式历史兼容路径（不再维护） */
     BOT: "/wecom",
-    /** Bot 模式备用路径 */
+    /** Bot 模式历史备用兼容路径（不再维护） */
     BOT_ALT: "/wecom/bot",
-    /** Agent 模式 (自建应用) */
+    /** Agent 模式历史兼容路径（不再维护） */
     AGENT: "/wecom/agent",
+    /** Bot 模式（唯一支持路径前缀） */
+    BOT_PLUGIN: "/plugins/wecom/bot",
+    /** Agent 模式（唯一支持路径前缀） */
+    AGENT_PLUGIN: "/plugins/wecom/agent",
 } as const;
 
 /** 企业微信 API 端点 */

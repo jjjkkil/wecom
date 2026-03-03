@@ -178,26 +178,44 @@ describe("wecomPlugin gateway lifecycle", () => {
     const startPromise = wecomPlugin.gateway!.startAccount!(ctx);
     await Promise.resolve();
 
-    const active = await sendWecomGetVerify({
+    const activeLegacyRoute = await sendWecomGetVerify({
       path: "/wecom/bot",
       token,
       encodingAESKey,
       receiveId,
     });
-    expect(active.handled).toBe(true);
-    expect(active.status).toBe(200);
-    expect(active.body).toBe("ping");
+    expect(activeLegacyRoute.handled).toBe(true);
+    expect(activeLegacyRoute.status).toBe(200);
+    expect(activeLegacyRoute.body).toBe("ping");
+
+    const activePluginRoute = await sendWecomGetVerify({
+      path: "/plugins/wecom/bot",
+      token,
+      encodingAESKey,
+      receiveId,
+    });
+    expect(activePluginRoute.handled).toBe(true);
+    expect(activePluginRoute.status).toBe(200);
+    expect(activePluginRoute.body).toBe("ping");
 
     abortController.abort();
     await startPromise;
 
-    const inactive = await sendWecomGetVerify({
+    const inactiveLegacyRoute = await sendWecomGetVerify({
       path: "/wecom/bot",
       token,
       encodingAESKey,
       receiveId,
     });
-    expect(inactive.handled).toBe(false);
+    expect(inactiveLegacyRoute.handled).toBe(false);
+
+    const inactivePluginRoute = await sendWecomGetVerify({
+      path: "/plugins/wecom/bot",
+      token,
+      encodingAESKey,
+      receiveId,
+    });
+    expect(inactivePluginRoute.handled).toBe(false);
   });
 
   it("rejects startup when matrix account credentials conflict", async () => {

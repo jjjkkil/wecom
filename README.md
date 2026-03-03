@@ -1,5 +1,8 @@
 # OpenClaw 企业微信（WeCom）Channel 插件
 
+> [!WARNING]
+> **OpenClaw 3.1+ 升级必读**：升级到 OpenClaw `3.1` 及以上版本的用户务必同步升级本插件，并将企业微信回调 URL 更新为 OpenClaw 推荐路径：`/plugins/wecom/bot/{accountId}` 与 `/plugins/wecom/agent/{accountId}`（旧 `/wecom/*` 仍兼容但不再维护）。
+
 <p align="center">
   <img src="https://img.shields.io/badge/Original%20Project-YanHaidao-orange?style=for-the-badge&logo=github" alt="Original Project" />
   <img src="https://img.shields.io/badge/License-ISC-blue?style=for-the-badge" alt="License" />
@@ -80,7 +83,6 @@
 ## 一、🚀 快速开始
 
 > 默认推荐：**多账号 + 多 Agent（matrix）**。  
-> 单账号 Bot/Agent 配置仍然支持，但建议仅用于兼容或小规模场景。
 > 建议 OpenClaw 使用 **2026.2.24+** 版本以获得完整生命周期与多账号行为修复。
 
 ### 1.1 安装插件
@@ -152,19 +154,12 @@ openclaw channels status
 ```
 
 Webhook 回调建议按账号分别配置：
-- Bot：`/wecom/bot/{accountId}`
-- Agent：`/wecom/agent/{accountId}`
+- Bot（推荐）：`/plugins/wecom/bot/{accountId}`
+- Agent（推荐）：`/plugins/wecom/agent/{accountId}`
 
 > 提示：如果你已有 `bindings`，请先备份并按需合并，避免覆盖其它通道绑定。
 
-### 1.3 兼容模式（单账号）
-
-为降低主线认知负担，README 默认仅展示多账号配置。  
-如果你在维护历史部署或只需单账号，请查看兼容文档：
-
-- [单账号兼容模式配置指南](./compat-single-account.md)
-
-### 1.4 高级网络配置（公网出口代理）
+### 1.3 高级网络配置（公网出口代理）
 如果您的服务器使用 **动态 IP** (如家庭宽带、内网穿透) 或 **无公网 IP**，企业微信 API 会因 IP 变动报错 `60020 not allow to access from your ip`。
 此时需配置一个**固定 IP 的正向代理** (如 Squid)，让插件通过该代理访问企微 API。
 
@@ -172,7 +167,7 @@ Webhook 回调建议按账号分别配置：
 openclaw config set channels.wecom.network.egressProxyUrl "http://proxy.company.local:3128"
 ```
 
-### 1.5 验证
+### 1.4 验证
 
 ```bash
 openclaw config set gateway.bind lan
@@ -286,38 +281,32 @@ openclaw channels status
 }
 ```
 
-### 2.2 兼容模式文档（单账号）
-
-- [单账号兼容模式配置指南](./compat-single-account.md)
-
-### 2.3 路由第一性原则
+### 2.2 路由第一性原则
 
 - `accountId` 是会话隔离边界：不同账号不共享会话、不共享动态 Agent。
 - Bot 无法交付时，只回退到**同组** Agent，不跨账号兜底。
 - 只有在未显式指定 `accountId` 时，才使用 `defaultAccount`。
 
-### 2.4 Webhook 路径（优先使用账号路径）
+### 2.3 Webhook 路径（必须使用账号路径）
 
 | 模式 | 路径 | 说明 |
 |:---|:---|:---|
-| Bot（推荐，多账号） | `/wecom/bot/{accountId}` | 指定账号回调（例如 `/wecom/bot/default`） |
-| Agent（推荐，多账号） | `/wecom/agent/{accountId}` | 指定账号回调（例如 `/wecom/agent/default`） |
-| Bot（兼容，单账号 legacy） | `/wecom/bot` 或 `/wecom` | 历史路径，仅单账号模式建议保留 |
-| Agent（兼容，单账号 legacy） | `/wecom/agent` | 历史路径，单账号模式可用 |
+| Bot（推荐，多账号） | `/plugins/wecom/bot/{accountId}` | 指定账号回调（例如 `/plugins/wecom/bot/default`） |
+| Agent（推荐，多账号） | `/plugins/wecom/agent/{accountId}` | 指定账号回调（例如 `/plugins/wecom/agent/default`） |
 
-### 2.5 从单账号迁移到多账号（4 步）
+### 2.4 从单账号迁移到多账号（4 步）
 
 1. 把原来的 `channels.wecom.bot` / `channels.wecom.agent` 拆到 `channels.wecom.accounts.default.bot/agent`。
 2. 按业务继续新增 `channels.wecom.accounts.<accountId>`（例如 `ops`、`sales`）。
 3. 为每个账号增加 `bindings[].match.accountId`，映射到对应 OpenClaw agent。
-4. 企业微信后台把回调 URL 改成账号路径：`/wecom/bot/{accountId}`、`/wecom/agent/{accountId}`，然后执行 `openclaw channels status` 验证。
+4. 企业微信后台把回调 URL 改成账号路径：`/plugins/wecom/bot/{accountId}`、`/plugins/wecom/agent/{accountId}`，然后执行 `openclaw channels status` 验证。
 
-### 2.6 DM 策略
+### 2.5 DM 策略
 
 - **不配置 `dm.allowFrom`** → 所有人可用（默认）
 - **配置 `dm.allowFrom: ["user1", "user2"]`** → 白名单模式，仅列表内用户可私聊
 
-### 2.7 常用指令
+### 2.6 常用指令
 
 | 指令 | 说明 | 示例 |
 |:---|:---|:---|
@@ -335,7 +324,7 @@ openclaw channels status
 1. 登录 [企业微信管理后台](https://work.weixin.qq.com/wework_admin/frame#/manageTools)
 2. 进入「安全与管理」→「管理工具」→「智能机器人」
 3. 创建机器人，选择 **API 模式**
-4. 填写回调 URL：`https://your-domain.com/wecom/bot/{accountId}`（例如默认账号：`https://your-domain.com/wecom/bot/default`）
+4. 填写回调 URL：`https://your-domain.com/plugins/wecom/bot/{accountId}`（例如默认账号：`https://your-domain.com/plugins/wecom/bot/default`）
 5. 记录 Token 和 EncodingAESKey
 
 ### 3.2 Agent 模式（自建应用）
@@ -346,7 +335,7 @@ openclaw channels status
 4. **重要：** 进入「企业可信IP」→「配置」→ 添加你服务器的 IP 地址
    - 如果你使用内网穿透/动态 IP，建议配置 `channels.wecom.network.egressProxyUrl` 走固定出口代理，否则可能出现：`60020 not allow to access from your ip`
 5. 在应用详情中设置「接收消息 - 设置API接收」
-6. 填写回调 URL：`https://your-domain.com/wecom/agent/{accountId}`（例如默认账号：`https://your-domain.com/wecom/agent/default`）
+6. 填写回调 URL：`https://your-domain.com/plugins/wecom/agent/{accountId}`（例如默认账号：`https://your-domain.com/plugins/wecom/agent/default`）
 7. 记录回调 Token 和 EncodingAESKey
 
 <div align="center">
@@ -510,6 +499,22 @@ Agent 输出 `{"template_card": ...}` 时自动渲染为交互卡片：
 
 <a id="sec-10"></a>
 ## 八、📝 更新日志
+
+### 2026.3.3（今日更新简报）
+
+- 【兼容性修复】🧩 **OpenClaw 3.1 路由抢占问题修复**：推荐回调地址升级为 `/plugins/wecom/bot/{accountId}`、`/plugins/wecom/agent/{accountId}`，规避根路径 Control UI fallback 抢占 webhook。
+- 【引导收敛】🧭 **Onboarding 仅支持账号化配置**：配置向导统一写入 `channels.wecom.accounts.<accountId>`，不再引导单账号旧结构。
+- 【兼容策略】🔁 **旧路径兼容保留**：`/wecom/*` 历史回调路径保留兼容能力，但不再作为维护主路径。
+- 【分流稳定性】🧭 **路由识别增强**：monitor 按插件命名空间账号路径识别，确保 Bot/Agent 分支稳定命中。
+- 【链路一致性】🔒 **Bot 回复不再误走 Agent**：修复 Bot 上下文通道标识，避免 `routeReply` 误触发到 outbound 主动发送链路。
+- 【验证结果】✅ WeCom 插件测试通过：`10` files / `41` tests。
+
+### 2026.3.2（版本更新简报）
+
+- 【交付收口】🔄 修复 Bot 会话“正在搜索相关内容”不结束的问题，并在可用时推送最终流帧结束状态。  
+- 【媒体兜底】📎 统一非图片文件、媒体失败和超时场景为“Bot 提示 + Agent 私信兜底”闭环，确保结果可达。  
+- 【类型兼容】🧠 扩展 `txt/docx/xlsx/pptx/csv/zip` 等常见文件类型识别，并保留 `application/octet-stream` 自动重试。  
+- 【工具治理】🛡 修复 Bot 会话 `message` 工具禁用策略，避免绕过 Bot 交付链路导致会话错位。  
 
 ### 2026.2.28
 

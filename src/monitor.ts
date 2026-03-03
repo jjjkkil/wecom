@@ -220,16 +220,24 @@ type RouteFailureReason =
   | "wecom_identity_mismatch"
   | "wecom_matrix_path_required";
 
-function isLegacyWecomPath(path: string): boolean {
-  return path === WEBHOOK_PATHS.BOT || path === WEBHOOK_PATHS.BOT_ALT || path === WEBHOOK_PATHS.AGENT;
+function isNonMatrixWecomBasePath(path: string): boolean {
+  return (
+    path === WEBHOOK_PATHS.BOT ||
+    path === WEBHOOK_PATHS.BOT_ALT ||
+    path === WEBHOOK_PATHS.AGENT ||
+    path === WEBHOOK_PATHS.BOT_PLUGIN ||
+    path === WEBHOOK_PATHS.AGENT_PLUGIN
+  );
 }
 
 function hasMatrixExplicitRoutesRegistered(): boolean {
   for (const key of webhookTargets.keys()) {
     if (key.startsWith(`${WEBHOOK_PATHS.BOT_ALT}/`)) return true;
+    if (key.startsWith(`${WEBHOOK_PATHS.BOT_PLUGIN}/`)) return true;
   }
   for (const key of agentTargets.keys()) {
     if (key.startsWith(`${WEBHOOK_PATHS.AGENT}/`)) return true;
+    if (key.startsWith(`${WEBHOOK_PATHS.AGENT_PLUGIN}/`)) return true;
   }
   return false;
 }
@@ -2114,7 +2122,7 @@ export function registerAgentWebhookTarget(target: AgentWebhookTarget): () => vo
  * 
  * 处理来自企业微信的所有 Webhook 请求。
  * 职责：
- * 1. 路由分发：按 Matrix/Legacy 路径分流 Bot 与 Agent 回调。
+ * 1. 路由分发：优先按 `/plugins/wecom/{bot|agent}/{accountId}` 分流，并兼容历史 `/wecom/*` 路径。
  * 2. 安全校验：验证企业微信签名 (Signature)。
  * 3. 消息解密：处理企业微信的加密包。
  * 4. 响应处理：
@@ -2138,7 +2146,7 @@ export async function handleWecomWebhookRequest(req: IncomingMessage, res: Serve
     `[wecom] inbound(http): reqId=${reqId} path=${path} method=${req.method ?? "UNKNOWN"} remote=${remote} ua=${ua ? `"${ua}"` : "N/A"} contentLength=${cl || "N/A"} query={timestamp:${hasTimestamp},nonce:${hasNonce},echostr:${hasEchostr},msg_signature:${hasMsgSig},signature:${hasSignature}}`,
   );
 
-  if (hasMatrixExplicitRoutesRegistered() && isLegacyWecomPath(path)) {
+  if (hasMatrixExplicitRoutesRegistered() && isNonMatrixWecomBasePath(path)) {
     logRouteFailure({
       reqId,
       path,
@@ -2149,14 +2157,19 @@ export async function handleWecomWebhookRequest(req: IncomingMessage, res: Serve
     writeRouteFailure(
       res,
       "wecom_matrix_path_required",
-      "Matrix mode requires explicit account path. Use /wecom/bot/{accountId} or /wecom/agent/{accountId}.",
+      "Matrix mode requires explicit account path. Use /plugins/wecom/bot/{accountId} or /plugins/wecom/agent/{accountId}.",
     );
     return true;
   }
 
-  const isAgentPath = path === WEBHOOK_PATHS.AGENT || path.startsWith(`${WEBHOOK_PATHS.AGENT}/`);
-  if (isAgentPath) {
-    const targets = agentTargets.get(path) ?? [];
+  const isAgentPathCandidate =
+    path === WEBHOOK_PATHS.AGENT ||
+    path === WEBHOOK_PATHS.AGENT_PLUGIN ||
+    path.startsWith(`${WEBHOOK_PATHS.AGENT}/`) ||
+    path.startsWith(`${WEBHOOK_PATHS.AGENT_PLUGIN}/`);
+  const matchedAgentTargets = agentTargets.get(path) ?? [];
+  if (matchedAgentTargets.length > 0 || isAgentPathCandidate) {
+    const targets = matchedAgentTargets;
     if (targets.length > 0) {
       const query = resolveQueryParams(req);
       const timestamp = query.get("timestamp") ?? "";
@@ -2332,7 +2345,7 @@ export async function handleWecomWebhookRequest(req: IncomingMessage, res: Serve
     return true;
   }
 
-  // Bot 模式路由: /wecom, /wecom/bot
+  // Bot 模式路由: /plugins/wecom/bot（推荐）以及 /wecom、/wecom/bot（兼容）
   const targets = webhookTargets.get(path);
   if (!targets || targets.length === 0) return false;
 

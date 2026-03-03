@@ -369,7 +369,7 @@ describe("handleWecomWebhookRequest", () => {
     }
   });
 
-  it("routes matrix bot callback by explicit account path", async () => {
+  it("routes bot callback by explicit plugin account path", async () => {
     const token = "MATRIX-TOKEN";
     const encodingAESKey = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
 
@@ -390,7 +390,7 @@ describe("handleWecomWebhookRequest", () => {
       config: { channels: { wecom: { accounts: {} } } } as OpenClawConfig,
       runtime: {},
       core: {} as any,
-      path: "/wecom/bot/acct-a",
+      path: "/plugins/wecom/bot/acct-a",
     });
     const unregisterB = registerWecomWebhookTarget({
       account: {
@@ -409,12 +409,12 @@ describe("handleWecomWebhookRequest", () => {
       config: { channels: { wecom: { accounts: {} } } } as OpenClawConfig,
       runtime: {},
       core: {} as any,
-      path: "/wecom/bot/acct-b",
+      path: "/plugins/wecom/bot/acct-b",
     });
 
     try {
       const timestamp = "1700000999";
-      const nonce = "nonce-matrix";
+      const nonce = "nonce-plugin-account";
       const plain = JSON.stringify({
         msgid: "MATRIX-MSG-1",
         aibotid: "BOT_B",
@@ -422,13 +422,94 @@ describe("handleWecomWebhookRequest", () => {
         from: { userid: "USERID_B" },
         response_url: "RESPONSEURL",
         msgtype: "text",
-        text: { content: "hello matrix" },
+        text: { content: "hello plugin account path" },
       });
       const encrypt = encryptWecomPlaintext({ encodingAESKey, receiveId: "", plaintext: plain });
       const msg_signature = computeWecomMsgSignature({ token, timestamp, nonce, encrypt });
       const req = createMockRequest({
         method: "POST",
-        url: `/wecom/bot/acct-b?msg_signature=${encodeURIComponent(msg_signature)}&timestamp=${encodeURIComponent(timestamp)}&nonce=${encodeURIComponent(nonce)}`,
+        url: `/plugins/wecom/bot/acct-b?msg_signature=${encodeURIComponent(msg_signature)}&timestamp=${encodeURIComponent(timestamp)}&nonce=${encodeURIComponent(nonce)}`,
+        body: { encrypt },
+      });
+      const res = createMockResponse();
+      const handled = await handleWecomWebhookRequest(req, res);
+      expect(handled).toBe(true);
+      expect(res._getStatusCode()).toBe(200);
+
+      const json = JSON.parse(res._getData()) as any;
+      const replyPlain = decryptWecomEncrypted({
+        encodingAESKey,
+        receiveId: "",
+        encrypt: json.encrypt,
+      });
+      const reply = JSON.parse(replyPlain) as any;
+      expect(reply.stream?.content).toBe("B处理中");
+    } finally {
+      unregisterA();
+      unregisterB();
+    }
+  });
+
+  it("routes bot callback by explicit plugin namespace path", async () => {
+    const token = "MATRIX-TOKEN-PLUGIN";
+    const encodingAESKey = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
+
+    const unregisterA = registerWecomWebhookTarget({
+      account: {
+        accountId: "acct-a",
+        enabled: true,
+        configured: true,
+        token,
+        encodingAESKey,
+        receiveId: "",
+        config: {
+          token,
+          encodingAESKey,
+          streamPlaceholderContent: "A处理中",
+        } as any,
+      } as any,
+      config: { channels: { wecom: { accounts: {} } } } as OpenClawConfig,
+      runtime: {},
+      core: {} as any,
+      path: "/plugins/wecom/bot/acct-a",
+    });
+    const unregisterB = registerWecomWebhookTarget({
+      account: {
+        accountId: "acct-b",
+        enabled: true,
+        configured: true,
+        token,
+        encodingAESKey,
+        receiveId: "",
+        config: {
+          token,
+          encodingAESKey,
+          streamPlaceholderContent: "B处理中",
+        } as any,
+      } as any,
+      config: { channels: { wecom: { accounts: {} } } } as OpenClawConfig,
+      runtime: {},
+      core: {} as any,
+      path: "/plugins/wecom/bot/acct-b",
+    });
+
+    try {
+      const timestamp = "1700001000";
+      const nonce = "nonce-matrix-plugin";
+      const plain = JSON.stringify({
+        msgid: "MATRIX-MSG-PLUGIN-1",
+        aibotid: "BOT_B",
+        chattype: "single",
+        from: { userid: "USERID_B_PLUGIN" },
+        response_url: "RESPONSEURL",
+        msgtype: "text",
+        text: { content: "hello matrix plugin path" },
+      });
+      const encrypt = encryptWecomPlaintext({ encodingAESKey, receiveId: "", plaintext: plain });
+      const msg_signature = computeWecomMsgSignature({ token, timestamp, nonce, encrypt });
+      const req = createMockRequest({
+        method: "POST",
+        url: `/plugins/wecom/bot/acct-b?msg_signature=${encodeURIComponent(msg_signature)}&timestamp=${encodeURIComponent(timestamp)}&nonce=${encodeURIComponent(nonce)}`,
         body: { encrypt },
       });
       const res = createMockResponse();
@@ -501,7 +582,7 @@ describe("handleWecomWebhookRequest", () => {
     }
   });
 
-  it("rejects legacy bot path when matrix explicit routes are registered", async () => {
+  it("rejects legacy paths and accountless plugin paths", async () => {
     const token = "MATRIX-TOKEN-3";
     const encodingAESKey = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
     const unregister = registerWecomWebhookTarget({
@@ -517,7 +598,7 @@ describe("handleWecomWebhookRequest", () => {
       config: { channels: { wecom: { accounts: { "acct-a": { bot: {} } } } } } as OpenClawConfig,
       runtime: {},
       core: {} as any,
-      path: "/wecom/bot/acct-a",
+      path: "/plugins/wecom/bot/acct-a",
     });
     try {
       const req = createMockRequest({
@@ -529,6 +610,18 @@ describe("handleWecomWebhookRequest", () => {
       expect(handled).toBe(true);
       expect(res._getStatusCode()).toBe(401);
       expect(JSON.parse(res._getData())).toMatchObject({
+        error: "wecom_matrix_path_required",
+      });
+
+      const pluginReq = createMockRequest({
+        method: "GET",
+        url: "/plugins/wecom/bot?timestamp=t&nonce=n&msg_signature=s&echostr=e",
+      });
+      const pluginRes = createMockResponse();
+      const pluginHandled = await handleWecomWebhookRequest(pluginReq, pluginRes);
+      expect(pluginHandled).toBe(true);
+      expect(pluginRes._getStatusCode()).toBe(401);
+      expect(JSON.parse(pluginRes._getData())).toMatchObject({
         error: "wecom_matrix_path_required",
       });
     } finally {
@@ -557,7 +650,7 @@ describe("handleWecomWebhookRequest", () => {
       },
       config: { channels: { wecom: { accounts: {} } } } as OpenClawConfig,
       runtime: {},
-      path: "/wecom/agent",
+      path: "/plugins/wecom/agent/default",
     } as any);
     const unregisterB = registerAgentWebhookTarget({
       agent: {
@@ -573,13 +666,13 @@ describe("handleWecomWebhookRequest", () => {
       },
       config: { channels: { wecom: { accounts: {} } } } as OpenClawConfig,
       runtime: {},
-      path: "/wecom/agent",
+      path: "/plugins/wecom/agent/default",
     } as any);
 
     try {
       const req = createMockRequest({
         method: "GET",
-        url: `/wecom/agent?msg_signature=${encodeURIComponent(signature)}&timestamp=${encodeURIComponent(timestamp)}&nonce=${encodeURIComponent(nonce)}&echostr=${encodeURIComponent(echostr)}`,
+        url: `/plugins/wecom/agent/default?msg_signature=${encodeURIComponent(signature)}&timestamp=${encodeURIComponent(timestamp)}&nonce=${encodeURIComponent(nonce)}&echostr=${encodeURIComponent(echostr)}`,
       });
       const res = createMockResponse();
       const handled = await handleWecomWebhookRequest(req, res);
