@@ -636,6 +636,53 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                             raw: result.raw,
                         });
                     }
+                    case "get_doc_security_setting": {
+                        const result = await docClient.getDocAuth({
+                            agent: account,
+                            docId: params.docId,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "get_doc_security_setting",
+                            accountId: account.accountId,
+                            docId: params.docId,
+                            summary: "文档安全设置已获取",
+                            details: result.secureSetting,
+                            raw: result.raw,
+                        });
+                    }
+                    case "mod_doc_security_setting": {
+                        // Alias to setDocSafetySetting logic
+                        const result = await docClient.setDocSafetySetting({
+                            agent: account,
+                            docId: params.docId,
+                            request: params.setting,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "mod_doc_security_setting",
+                            accountId: account.accountId,
+                            docId: result.docId,
+                            summary: "文档安全设置已更新",
+                            raw: result.raw,
+                        });
+                    }
+                    case "mod_doc_member_notified_scope": {
+                        const result = await docClient.modDocMemberNotifiedScope({
+                            agent: account,
+                            docId: params.docId,
+                            notified_scope_type: params.notified_scope_type,
+                            notified_member_list: params.notified_member_list,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "mod_doc_member_notified_scope",
+                            accountId: account.accountId,
+                            docId: params.docId,
+                            summary: "文档成员通知范围已更新",
+                            raw: result,
+                        });
+                    }
                     case "create_collect": {
                         const result = await docClient.createCollect({
                             agent: account,

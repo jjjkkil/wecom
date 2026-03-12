@@ -168,8 +168,23 @@ export function shouldProcessAgentInboundMessage(params: {
     const eventType = String(params.eventType ?? "").trim().toLowerCase();
 
     if (msgType === "event") {
-        const allowedEvents = ["subscribe", "enter_agent", "batch_job_result"];
-        if (allowedEvents.includes(eventType)) {
+        const allowedEvents = [
+            "subscribe",
+            "enter_agent",
+            "batch_job_result",
+            // WeCom Doc events
+            "doc_create",
+            "doc_delete",
+            "doc_content_change",
+            "doc_member_change",
+            // WeCom Form events
+            "wedoc_collect_submit",
+            // SmartSheet events
+            "smartsheet_record_change",
+            "smartsheet_field_change",
+            "smartsheet_view_change"
+        ];
+        if (allowedEvents.includes(eventType) || eventType.startsWith("doc_") || eventType.startsWith("wedoc_") || eventType.startsWith("smartsheet_")) {
             return {
                 shouldProcess: true,
                 reason: `allowed_event:${eventType}`,

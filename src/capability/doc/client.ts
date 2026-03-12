@@ -599,28 +599,6 @@ export class WecomDocClient {
         };
     }
 
-    async getDocSecuritySetting(params: { agent: ResolvedAgentAccount; docId: string }) {
-        const { agent, docId } = params;
-        const json = await this.postWecomDocApi({
-            path: "/cgi-bin/wedoc/get_doc_security_setting",
-            actionLabel: "get_doc_security_setting",
-            agent,
-            body: { docid: readString(docId) },
-        });
-        return json;
-    }
-
-    async modDocSecuritySetting(params: { agent: ResolvedAgentAccount; docId: string; setting: any }) {
-        const { agent, docId, setting } = params;
-        const json = await this.postWecomDocApi({
-            path: "/cgi-bin/wedoc/mod_doc_security_setting",
-            actionLabel: "mod_doc_security_setting",
-            agent,
-            body: { docid: readString(docId), ...setting },
-        });
-        return json;
-    }
-
     async modDocMemberNotifiedScope(params: { agent: ResolvedAgentAccount; docId: string; notified_scope_type: number; notified_member_list?: any[] }) {
         const { agent, docId, notified_scope_type, notified_member_list } = params;
         const json = await this.postWecomDocApi({

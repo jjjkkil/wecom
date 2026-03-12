@@ -78,6 +78,27 @@ export const wecomDocToolSchema = {
         {
             type: "object",
             additionalProperties: false,
+            required: ["action", "docId"],
+            properties: {
+                action: { const: "get_doc_security_setting" },
+                accountId: accountIdProperty,
+                docId: docIdProperty,
+            },
+        },
+        {
+            type: "object",
+            additionalProperties: false,
+            required: ["action", "docId", "setting"],
+            properties: {
+                action: { const: "mod_doc_security_setting" },
+                accountId: accountIdProperty,
+                docId: docIdProperty,
+                setting: nonEmptyObjectProperty,
+            },
+        },
+        {
+            type: "object",
+            additionalProperties: false,
             required: ["action", "docName"],
             properties: {
                 action: { const: "create" },
@@ -184,27 +205,6 @@ export const wecomDocToolSchema = {
                 action: { const: "get_auth" },
                 accountId: accountIdProperty,
                 docId: docIdProperty,
-            },
-        },
-        {
-            type: "object",
-            additionalProperties: false,
-            required: ["action", "docId"],
-            properties: {
-                action: { const: "get_doc_security_setting" },
-                accountId: accountIdProperty,
-                docId: docIdProperty,
-            },
-        },
-        {
-            type: "object",
-            additionalProperties: false,
-            required: ["action", "docId", "setting"],
-            properties: {
-                action: { const: "mod_doc_security_setting" },
-                accountId: accountIdProperty,
-                docId: docIdProperty,
-                setting: nonEmptyObjectProperty,
             },
         },
         {
@@ -376,44 +376,17 @@ export const wecomDocToolSchema = {
                 request: {
                     type: "object",
                     additionalProperties: true,
-                    description: "mod_doc_safty_setting 请求体；插件会自动补 docid",
+                    description: "mod_doc_safty_setting 请求体；包含 enable_readonly_copy, watermark 等",
                     properties: {
-                        safty_setting: {
+                        enable_readonly_copy: { type: "boolean", description: "是否允许只读成员复制、下载" },
+                        watermark: {
                             type: "object",
-                            description: "安全设置",
+                            description: "水印设置",
                             properties: {
-                                watermark_setting: {
-                                    type: "object",
-                                    description: "水印助手",
-                                    properties: {
-                                        enable_watermark: { type: "boolean" },
-                                        enable_doc_name: { type: "boolean" },
-                                        enable_user_name: { type: "boolean" },
-                                        enable_date: { type: "boolean" },
-                                        enable_time: { type: "boolean" },
-                                    },
-                                },
-                                share_setting: {
-                                    type: "object",
-                                    description: "分享设置",
-                                    properties: {
-                                        share_range: {
-                                            type: "integer",
-                                            description: "0-仅成员，1-成员及外部联系人，2-所有人",
-                                        },
-                                        enable_external_share: { type: "boolean" },
-                                    },
-                                },
-                            },
-                        },
-                        auth_setting: {
-                            type: "object",
-                            description: "权限设置",
-                            properties: {
-                                auth_type: {
-                                    type: "integer",
-                                    description: "0-公开，1-企业内，2-指定人",
-                                },
+                                margin_type: { type: "integer", description: "1:稀疏，2:紧密" },
+                                show_visitor_name: { type: "boolean" },
+                                show_text: { type: "boolean" },
+                                text: { type: "string" },
                             },
                         },
                     },
