@@ -215,6 +215,11 @@ export const wecomDocToolSchema = {
                 action: { const: "grant_access" },
                 accountId: accountIdProperty,
                 docId: docIdProperty,
+                auth: {
+                    type: "integer",
+                    enum: [1, 2, 7],
+                    description: "权限位：1-查看，2-编辑，7-管理",
+                },
                 viewers: {
                     ...docMemberEntryArrayProperty,
                     description: "新增查看成员列表",
@@ -241,9 +246,44 @@ export const wecomDocToolSchema = {
                 action: { const: "add_collaborators" },
                 accountId: accountIdProperty,
                 docId: docIdProperty,
+                auth: {
+                    type: "integer",
+                    enum: [1, 2, 7],
+                    description: "权限位：1-查看，2-编辑，7-管理；默认为 2 (编辑)",
+                },
                 collaborators: {
                     ...docMemberEntryArrayProperty,
                     description: "要添加的协作者列表；字符串会自动按 userid 处理",
+                },
+            },
+        },
+        {
+            type: "object",
+            additionalProperties: false,
+            required: ["action", "docId"],
+            properties: {
+                action: { const: "get_content" },
+                accountId: accountIdProperty,
+                docId: docIdProperty,
+            },
+        },
+        {
+            type: "object",
+            additionalProperties: false,
+            required: ["action", "docId", "requests"],
+            properties: {
+                action: { const: "update_content" },
+                accountId: accountIdProperty,
+                docId: docIdProperty,
+                version: {
+                    type: "integer",
+                    description: "可选：文档版本号，用于乐观锁",
+                },
+                requests: {
+                    type: "array",
+                    minItems: 1,
+                    description: "操作列表，按企业微信官方 batch_update 定义填写",
+                    items: nonEmptyObjectProperty,
                 },
             },
         },

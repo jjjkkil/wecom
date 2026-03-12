@@ -42,6 +42,12 @@ export interface DocMemberEntry {
     userid?: string;
     partyid?: string;
     tagid?: string;
+    /**
+     * 权限位：1-查看，2-编辑，7-管理
+     * 只有“智能表格”才支持读写权限（auth=2）？
+     * 实际上企微文档现在也支持设置协作者权限了。
+     */
+    auth?: number;
 }
 
 function normalizeDocMemberEntry(value: unknown): DocMemberEntry | null {
@@ -60,6 +66,7 @@ function normalizeDocMemberEntry(value: unknown): DocMemberEntry | null {
     if (readString(entry.userid)) entry.userid = readString(entry.userid);
     if (readString(entry.partyid)) entry.partyid = readString(entry.partyid);
     if (readString(entry.tagid)) entry.tagid = readString(entry.tagid);
+    if (entry.auth !== undefined) entry.auth = Number(entry.auth);
     return entry;
 }
 
@@ -73,15 +80,16 @@ function buildDocMemberAuthRequest(params: {
     collaborators?: unknown;
     removeViewers?: unknown;
     removeCollaborators?: unknown;
+    authLevel?: number; // Default auth level for new members if not specified in entry
 }): Record<string, unknown> {
-    const { docId, viewers, collaborators, removeViewers, removeCollaborators } = params;
+    const { docId, viewers, collaborators, removeViewers, removeCollaborators, authLevel } = params;
     const payload: Record<string, unknown> = {
         docid: readString(docId),
     };
     if (!payload.docid) throw new Error("docId required");
 
-    const normalizedViewers = normalizeDocMemberEntryList(viewers);
-    const normalizedCollaborators = normalizeDocMemberEntryList(collaborators);
+    const normalizedViewers = normalizeDocMemberEntryList(viewers).map(v => ({ ...v, auth: v.auth ?? authLevel ?? 1 }));
+    const normalizedCollaborators = normalizeDocMemberEntryList(collaborators).map(v => ({ ...v, auth: v.auth ?? authLevel ?? 2 }));
     const normalizedRemovedViewers = normalizeDocMemberEntryList(removeViewers);
     const normalizedRemovedCollaborators = normalizeDocMemberEntryList(removeCollaborators);
 
@@ -140,19 +148,14 @@ export class WecomDocClient {
         path: string;
         actionLabel: string;
         agent: ResolvedAgentAccount;
-        body: Record<string, unknown>;
+        body: Record<string, unknown> | unknown[];
     }): Promise<any> {
         const { path, actionLabel, agent, body } = params;
 
-        // Fallback: If `agent.agentId` is technically missing but doc tools don't actually need it strictly,
-        // we still need corpId & corpSecret from the root `account` scope in many architectures.
-        // In @yanhaidao/wecom, `ResolvedAgentAccount` has corpId, corpSecret.
         const token = await getAccessToken(agent);
         const url = `https://qyapi.weixin.qq.com${path}?access_token=${encodeURIComponent(token)}`;
         const proxyUrl = resolveWecomEgressProxyUrlFromNetwork(agent.network);
 
-        // Poor man's retry specifically for docs usually. 
-        // wecomFetch itself doesn't retry network drops unless configured, but let's just do a simple try-block here or rely on wecomFetch
         let lastErr: any;
         for (let attempt = 1; attempt <= 3; attempt++) {
             try {
@@ -348,14 +351,16 @@ export class WecomDocClient {
         collaborators?: unknown;
         removeViewers?: unknown;
         removeCollaborators?: unknown;
+        authLevel?: number;
     }) {
-        const { agent, docId, viewers, collaborators, removeViewers, removeCollaborators } = params;
+        const { agent, docId, viewers, collaborators, removeViewers, removeCollaborators, authLevel } = params;
         const payload = buildDocMemberAuthRequest({
             docId,
             viewers,
             collaborators,
             removeViewers,
             removeCollaborators,
+            authLevel,
         });
         const result = await this.setDocMemberAuth({
             agent,
@@ -371,12 +376,13 @@ export class WecomDocClient {
         };
     }
 
-    async addDocCollaborators(params: { agent: ResolvedAgentAccount; docId: string; collaborators: unknown }) {
-        const { agent, docId, collaborators } = params;
+    async addDocCollaborators(params: { agent: ResolvedAgentAccount; docId: string; collaborators: unknown; auth?: number }) {
+        const { agent, docId, collaborators, auth } = params;
         return this.grantDocAccess({
             agent,
             docId,
             collaborators,
+            authLevel: auth ?? 2, // Default to edit/read-write for collaborators
         });
     }
 
@@ -507,14 +513,45 @@ export class WecomDocClient {
             path: "/cgi-bin/wedoc/get_form_statistic",
             actionLabel: "get_form_statistic",
             agent,
-            body: { items: payload }, // Actually wait, in original it was `body: payload` (array directly?). WeCom API requires `body: { requests: ... }` ? Original had `body: payload` which was an array? No wait. The original reference was `postWecomDocApi(..., body: payload)`. Let's assume it wants an array directly as body if `payload` is array. However fetch body stringify handles array. Wait, actually I should check WeCom docs. But the reference code had `body: payload`. So we do the same. Wait, TS complains if I type body as Record<string, unknown>. Let me just pass it as any. Let's fix type.
-        } as any);
+            body: { requests: payload },
+        });
         return {
             raw: json,
             items: readArray(json),
             successCount: readArray(json).filter((item: any) => Number(item?.errcode ?? 0) === 0).length,
         };
     }
+
+    // --- Content Operations (New) ---
+
+    async getDocContent(params: { agent: ResolvedAgentAccount; docId: string }) {
+        const { agent, docId } = params;
+        const json = await this.postWecomDocApi({
+            path: "/cgi-bin/wedoc/document/get",
+            actionLabel: "get_doc_content",
+            agent,
+            body: { docid: readString(docId) },
+        });
+        return { raw: json, content: json };
+    }
+
+    async updateDocContent(params: { agent: ResolvedAgentAccount; docId: string; requests: unknown[]; version?: number }) {
+        const { agent, docId, requests, version } = params;
+        const body: Record<string, unknown> = {
+            docid: readString(docId),
+            requests: readArray(requests),
+        };
+        if (version !== undefined) body.version = version;
+        const json = await this.postWecomDocApi({
+            path: "/cgi-bin/wedoc/document/batch_update",
+            actionLabel: "update_doc_content",
+            agent,
+            body,
+        });
+        return { raw: json };
+    }
+
+    // --- Spreadsheet Operations ---
 
     async getSheetProperties(params: { agent: ResolvedAgentAccount; docId: string }) {
         const { agent, docId } = params;
@@ -567,6 +604,8 @@ export class WecomDocClient {
         });
         return { raw: json, docId: docId };
     }
+
+    // --- Smart Table Operations ---
 
     async smartTableOperate(params: { agent: ResolvedAgentAccount; docId: string; operation: string; bodyData: any }) {
         const { agent, docId, operation, bodyData } = params;

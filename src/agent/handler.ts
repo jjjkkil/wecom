@@ -36,6 +36,23 @@ const ERROR_HELP = "\n\n遇到问题？联系作者: YanHaidao (微信: YanHaida
 const RECENT_MSGID_TTL_MS = 10 * 60 * 1000;
 const recentAgentMsgIds = new Map<string, number>();
 
+// Event deduplication (e.g. for ENTER_AGENT/subscribe welcome messages)
+// We only want to send a welcome message once every 5 minutes per user
+const RECENT_EVENT_TTL_MS = 5 * 60 * 1000;
+const recentAgentEvents = new Map<string, number>();
+
+function rememberAgentEvent(key: string): boolean {
+    const now = Date.now();
+    const existing = recentAgentEvents.get(key);
+    if (existing && now - existing < RECENT_EVENT_TTL_MS) return false;
+    recentAgentEvents.set(key, now);
+    // Prune expired
+    for (const [k, ts] of recentAgentEvents) {
+        if (now - ts >= RECENT_EVENT_TTL_MS) recentAgentEvents.delete(k);
+    }
+    return true;
+}
+
 function rememberAgentMsgId(msgId: string): boolean {
     const now = Date.now();
     const existing = recentAgentMsgIds.get(msgId);
@@ -151,7 +168,7 @@ export function shouldProcessAgentInboundMessage(params: {
     const eventType = String(params.eventType ?? "").trim().toLowerCase();
 
     if (msgType === "event") {
-        const allowedEvents = ["subscribe", "enter_agent", "location", "batch_job_result"];
+        const allowedEvents = ["subscribe", "enter_agent", "batch_job_result"];
         if (allowedEvents.includes(eventType)) {
             return {
                 shouldProcess: true,
@@ -249,6 +266,7 @@ async function handleMessageCallback(params: AgentWebhookParams): Promise<boolea
         const chatId = extractChatId(msg);
         const msgId = extractMsgId(msg);
         const eventType = String((msg as Record<string, unknown>).Event ?? "").trim().toLowerCase();
+
         if (msgId) {
             const ok = rememberAgentMsgId(msgId);
             if (!ok) {
@@ -264,6 +282,19 @@ async function handleMessageCallback(params: AgentWebhookParams): Promise<boolea
                         body: msg,
                     },
                 });
+                res.statusCode = 200;
+                res.setHeader("Content-Type", "text/plain; charset=utf-8");
+                res.end("success");
+                return true;
+            }
+        }
+
+        // 针对 ENTER_AGENT / subscribe 等事件进行去重（冷却时间）
+        if (msgType === "event" && (eventType === "enter_agent" || eventType === "subscribe")) {
+            const eventKey = `${fromUser}:${eventType}`;
+            const ok = rememberAgentEvent(eventKey);
+            if (!ok) {
+                log?.(`[wecom-agent] duplicate/cooldown eventKey=${eventKey} from=${fromUser}; skipped welcome`);
                 res.statusCode = 200;
                 res.setHeader("Content-Type", "text/plain; charset=utf-8");
                 res.end("success");

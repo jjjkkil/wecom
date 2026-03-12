@@ -541,6 +541,7 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                             collaborators: params.collaborators,
                             removeViewers: params.removeViewers,
                             removeCollaborators: params.removeCollaborators,
+                            authLevel: params.auth,
                         });
                         return buildToolResult({
                             ok: true,
@@ -556,6 +557,7 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                             agent: account,
                             docId: params.docId,
                             collaborators: params.collaborators,
+                            auth: params.auth,
                         });
                         return buildToolResult({
                             ok: true,
@@ -563,6 +565,36 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                             accountId: account.accountId,
                             docId: result.docId,
                             summary: `协作者已添加：${result.addedCollaboratorCount ?? 0}`,
+                            raw: result.raw,
+                        });
+                    }
+                    case "get_content": {
+                        const result = await docClient.getDocContent({
+                            agent: account,
+                            docId: params.docId,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "get_content",
+                            accountId: account.accountId,
+                            docId: params.docId,
+                            summary: "文档内容已获取",
+                            raw: result.raw,
+                        });
+                    }
+                    case "update_content": {
+                        const result = await docClient.updateDocContent({
+                            agent: account,
+                            docId: params.docId,
+                            requests: params.requests,
+                            version: params.version,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "update_content",
+                            accountId: account.accountId,
+                            docId: params.docId,
+                            summary: "文档内容已更新",
                             raw: result.raw,
                         });
                     }
