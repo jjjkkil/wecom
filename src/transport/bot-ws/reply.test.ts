@@ -83,6 +83,53 @@ describe("createBotWsReplyHandle", () => {
     expect(replyStream).not.toHaveBeenCalled();
   });
 
+  it("sends cumulative content for block streaming updates", async () => {
+    const replyStream = vi.fn().mockResolvedValue(undefined);
+    const handle = createBotWsReplyHandle({
+      client: {
+        replyStream,
+      } as unknown as ReplyHandleParams["client"],
+      frame: {
+        headers: { req_id: "req-blocks" },
+        body: {},
+      } as unknown as ReplyHandleParams["frame"],
+      accountId: "default",
+      autoSendPlaceholder: false,
+    });
+
+    await handle.deliver({ text: "第一段" }, { kind: "block" });
+    await handle.deliver({ text: "第二段" }, { kind: "block" });
+    await handle.deliver({ text: "收尾" }, { kind: "final" });
+
+    expect(replyStream).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        headers: { req_id: "req-blocks" },
+      }),
+      expect.any(String),
+      "第一段",
+      false,
+    );
+    expect(replyStream).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        headers: { req_id: "req-blocks" },
+      }),
+      expect.any(String),
+      "第一段\n第二段",
+      false,
+    );
+    expect(replyStream).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        headers: { req_id: "req-blocks" },
+      }),
+      expect.any(String),
+      "第一段\n第二段\n收尾",
+      true,
+    );
+  });
+
   it("swallows expired stream update errors during delivery", async () => {
     const expiredError = {
       headers: { req_id: "req-expired" },

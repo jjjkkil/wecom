@@ -44,6 +44,7 @@ export function createBotWsReplyHandle(params: {
   onFail?: (error: unknown) => void;
 }): ReplyHandle {
   let streamId: string | undefined;
+  let accumulatedText = "";
   const resolveStreamId = () => {
     streamId ||= generateReqId("stream");
     return streamId;
@@ -107,9 +108,27 @@ export function createBotWsReplyHandle(params: {
       const text = payload.text?.trim();
       if (!text) return;
 
+      if (info.kind === "block") {
+        accumulatedText = accumulatedText ? `${accumulatedText}\n${text}` : text;
+      }
+
+      const outboundText =
+        info.kind === "final"
+          ? accumulatedText
+            ? text
+              ? `${accumulatedText}\n${text}`
+              : accumulatedText
+            : text
+          : accumulatedText || text;
+
       settleStream();
       try {
-        await params.client.replyStream(params.frame, resolveStreamId(), text, info.kind === "final");
+        await params.client.replyStream(
+          params.frame,
+          resolveStreamId(),
+          outboundText,
+          info.kind === "final",
+        );
       } catch (error) {
         if (isTerminalReplyError(error)) {
           params.onFail?.(error);
