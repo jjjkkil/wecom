@@ -14,6 +14,26 @@ function isInvalidReqIdError(error: unknown): boolean {
   return errcode === 846605 || errmsg.includes("invalid req_id");
 }
 
+function isExpiredStreamUpdateError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const errcode = "errcode" in error ? Number(error.errcode) : undefined;
+  const errmsg = "errmsg" in error ? String(error.errmsg ?? "").toLowerCase() : "";
+  return errcode === 846608 || errmsg.includes("stream message update expired");
+}
+
+/** SDK rejects with a plain Error whose message contains "ack timeout" when
+ * the WeCom server does not acknowledge a reply within 5 s.  Once timed out
+ * the reqId slot is released; further replies on the same reqId will fail. */
+function isAckTimeoutError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("ack timeout");
+}
+
+function isTerminalReplyError(error: unknown): boolean {
+  return isInvalidReqIdError(error) || isExpiredStreamUpdateError(error) || isAckTimeoutError(error);
+}
+
 export function createBotWsReplyHandle(params: {
   client: WSClient;
   frame: WsFrame<BaseMessage | EventMessage>;
@@ -40,19 +60,25 @@ export function createBotWsReplyHandle(params: {
     placeholderKeepalive = undefined;
   };
 
+  const settleStream = () => {
+    streamSettled = true;
+    stopPlaceholderKeepalive();
+  };
+
   const sendPlaceholder = () => {
     if (streamSettled || placeholderInFlight) return;
     placeholderInFlight = true;
     params.client.replyStream(params.frame, resolveStreamId(), placeholderText, false)
-      .catch(() => { /* ignore */ })
+      .catch((error) => {
+        if (!isTerminalReplyError(error)) {
+          return;
+        }
+        settleStream();
+        params.onFail?.(error);
+      })
       .finally(() => {
         placeholderInFlight = false;
       });
-  };
-
-  const settleStream = () => {
-    streamSettled = true;
-    stopPlaceholderKeepalive();
   };
 
   if (params.autoSendPlaceholder !== false) {
@@ -82,12 +108,20 @@ export function createBotWsReplyHandle(params: {
       if (!text) return;
 
       settleStream();
-      await params.client.replyStream(params.frame, resolveStreamId(), text, info.kind === "final");
+      try {
+        await params.client.replyStream(params.frame, resolveStreamId(), text, info.kind === "final");
+      } catch (error) {
+        if (isTerminalReplyError(error)) {
+          params.onFail?.(error);
+          return;
+        }
+        throw error;
+      }
       params.onDeliver?.();
     },
     fail: async (error: unknown) => {
       settleStream();
-      if (isInvalidReqIdError(error)) {
+      if (isTerminalReplyError(error)) {
         params.onFail?.(error);
         return;
       }

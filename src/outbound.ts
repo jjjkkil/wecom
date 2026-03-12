@@ -2,7 +2,20 @@ import type { ChannelOutboundAdapter, ChannelOutboundContext } from "openclaw/pl
 
 import { resolveWecomAccount, resolveWecomAccountConflict, resolveWecomAccounts } from "./config/index.js";
 import { WecomAgentDeliveryService } from "./capability/agent/index.js";
-import { getWecomRuntime } from "./runtime.js";
+import { getBotWsPushHandle, getWecomRuntime } from "./app/index.js";
+
+async function sendTextViaBotWs(accountId: string, to: string | { chatid?: string; touser?: string; toparty?: string; totag?: string }, text: string) {
+  const pushHandle = getBotWsPushHandle(accountId);
+  if (!pushHandle?.isConnected()) {
+    return false;
+  }
+
+  const chatId = typeof to === "string" ? to : to.chatid || to.touser;
+  if (!chatId) return false;
+
+  await pushHandle.sendMarkdown(chatId, text);
+  return true;
+}
 
 function resolveAgentConfigOrThrow(params: {
   cfg: ChannelOutboundContext["cfg"];
@@ -94,11 +107,16 @@ export const wecomOutbound: ChannelOutboundAdapter = {
     console.log(`[wecom-outbound] Sending text to target=${String(to ?? "")} (len=${outgoingText.length})`);
 
     try {
-      await deliveryService.sendText({
-        to,
-        text: outgoingText,
-      });
-      console.log(`[wecom-outbound] Successfully sent text to ${String(to ?? "")}`);
+      const sentViaWs = await sendTextViaBotWs(agent.accountId, to, outgoingText);
+      if (sentViaWs) {
+        console.log(`[wecom-outbound] Successfully sent text via Bot WS to ${String(to ?? "")}`);
+      } else {
+        await deliveryService.sendText({
+          to,
+          text: outgoingText,
+        });
+        console.log(`[wecom-outbound] Successfully sent text via Agent API to ${String(to ?? "")}`);
+      }
     } catch (err) {
       console.error(`[wecom-outbound] Failed to send text to ${String(to ?? "")}:`, err);
       throw err;
@@ -106,7 +124,7 @@ export const wecomOutbound: ChannelOutboundAdapter = {
 
     return {
       channel: "wecom",
-      messageId: `agent-${Date.now()}`,
+      messageId: `sent-${Date.now()}`,
       timestamp: Date.now(),
     };
   },

@@ -74,14 +74,10 @@ export function resolveWecomTarget(raw: string | undefined): WecomTarget | undef
         return { chatid: clean };
     }
 
-    // Pure digits are likely Department IDs (Parties)
-    // 纯数字优先被视为部门 ID (Parties)，方便运维配置 (如 "1" 代表根部门)
-    // 如果必须要发送给纯数字 ID 的用户，请使用显式前缀 "user:1001"
-    if (/^\d+$/.test(clean)) {
-        return { toparty: clean };
-    }
-
     // Default to User (默认为用户)
+    // 注意：纯数字通常可能是 UserID (内部成员 ID)，也可能是 PartyID。
+    // 为了兼容性，如果没有前缀且不匹配群聊规则，我们将其视为 UserID。
+    // 如果需要明确发送给部门，请使用 "party:1" 前缀。
     return { touser: clean };
 }
 

@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
-import type { ResolvedAgentAccount } from "../types/index.js";
+import type { ResolvedAgentAccount, WecomInboundKind } from "../types/index.js";
 import {
     extractMsgType,
     extractFromUser,
@@ -22,6 +22,7 @@ import { downloadAgentApiMedia, sendAgentApiText } from "../transport/agent-api/
 import { getWecomRuntime } from "../runtime.js";
 import type { WecomAgentInboundMessage } from "../types/index.js";
 import type { TransportSessionPatch } from "../types/index.js";
+import type { WecomAccountRuntime } from "../app/account-runtime.js";
 import { buildWecomUnauthorizedCommandPrompt, resolveWecomCommandAuthorization } from "../shared/command-auth.js";
 import { resolveWecomMediaMaxBytes, shouldRejectWecomDefaultRoute } from "../config/index.js";
 import { buildAgentSessionTarget, generateAgentId, shouldUseDynamicAgent, ensureDynamicAgentListed } from "../dynamic-agent.js";
@@ -150,6 +151,13 @@ export function shouldProcessAgentInboundMessage(params: {
     const eventType = String(params.eventType ?? "").trim().toLowerCase();
 
     if (msgType === "event") {
+        const allowedEvents = ["subscribe", "enter_agent", "location", "batch_job_result"];
+        if (allowedEvents.includes(eventType)) {
+            return {
+                shouldProcess: true,
+                reason: `allowed_event:${eventType}`,
+            };
+        }
         return {
             shouldProcess: false,
             reason: `event:${eventType || "unknown"}`,
@@ -341,6 +349,31 @@ async function processAgentMessage(params: {
 
     const isGroup = Boolean(chatId);
     const peerId = isGroup ? chatId! : fromUser;
+    const eventType = String((msg as any).Event ?? "").trim().toLowerCase();
+
+    const resolveInboundKind = (): WecomInboundKind => {
+        if (msgType === "event") {
+            if (eventType === "subscribe" || eventType === "enter_agent") return "welcome";
+            return "event";
+        }
+        if (msgType === "image") return "image";
+        if (msgType === "voice") return "voice";
+        if (msgType === "video") return "video" as any;
+        if (msgType === "file") return "file";
+        return "text";
+    };
+
+    const inboundKind = resolveInboundKind();
+    const resolveEventText = (): string => {
+        if (inboundKind === "welcome" && agent.config.welcomeText) {
+            return agent.config.welcomeText;
+        }
+        if (msgType === "event") {
+            return `[event:${eventType || "unknown"}]`;
+        }
+        return content;
+    };
+
     const mediaMaxBytes = resolveWecomMediaMaxBytes(config);
 
     // 处理媒体文件

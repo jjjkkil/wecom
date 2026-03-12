@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import AiBot, { type BaseMessage, type EventMessage, type WsFrame } from "@wecom/aibot-node-sdk";
 
 import type { RuntimeLogSink } from "../../types/index.js";
+import { registerBotWsPushHandle, unregisterBotWsPushHandle } from "../../app/index.js";
 import { mapBotWsFrameToInboundEvent } from "./inbound.js";
 import { createBotWsReplyHandle } from "./reply.js";
 import { createBotWsSessionSnapshot } from "./session.js";
@@ -38,6 +39,23 @@ export class BotWsSdkAdapter {
       },
     });
     this.client = client;
+    registerBotWsPushHandle(this.runtime.account.accountId, {
+      isConnected: () => client.isConnected,
+      sendMarkdown: async (chatId, content) => {
+        await client.sendMessage(chatId, {
+          msgtype: "markdown",
+          markdown: { content },
+        });
+        this.runtime.touchTransportSession("bot-ws", {
+          ownerId: this.ownerId,
+          running: true,
+          connected: client.isConnected,
+          authenticated: client.isConnected,
+          lastOutboundAt: Date.now(),
+          lastError: undefined,
+        });
+      },
+    });
 
     client.on("connected", () => {
       this.log.info?.(`[wecom-ws] connected account=${this.runtime.account.accountId}`);
@@ -160,11 +178,41 @@ export class BotWsSdkAdapter {
       await this.runtime.handleEvent(event, replyHandle);
     };
 
+    const runHandleFrame = (frame: WsFrame<BaseMessage | EventMessage>) => {
+      void handleFrame(frame).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log.error?.(
+          `[wecom-ws] frame handler failed account=${this.runtime.account.accountId} reqId=${frame.headers?.req_id ?? "n/a"} message=${message}`,
+        );
+        this.runtime.recordOperationalIssue({
+          transport: "bot-ws",
+          category: "runtime-error",
+          messageId: frame.body?.msgid,
+          raw: {
+            transport: "bot-ws",
+            command: frame.cmd,
+            headers: frame.headers,
+            body: frame.body,
+            envelopeType: "ws",
+          },
+          summary: `bot-ws frame handler crashed reqId=${frame.headers?.req_id ?? "n/a"}`,
+          error: message,
+        });
+        this.runtime.touchTransportSession("bot-ws", {
+          ownerId: this.ownerId,
+          running: client.isConnected,
+          connected: client.isConnected,
+          authenticated: client.isConnected,
+          lastError: message,
+        });
+      });
+    };
+
     client.on("message", (frame) => {
-      void handleFrame(frame);
+      runHandleFrame(frame);
     });
     client.on("event", (frame) => {
-      void handleFrame(frame);
+      runHandleFrame(frame);
     });
 
     client.connect();
@@ -172,6 +220,7 @@ export class BotWsSdkAdapter {
 
   stop(): void {
     this.log.info?.(`[wecom-ws] stop account=${this.runtime.account.accountId}`);
+    unregisterBotWsPushHandle(this.runtime.account.accountId);
     this.runtime.updateTransportSession(
       createBotWsSessionSnapshot({
         accountId: this.runtime.account.accountId,
