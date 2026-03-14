@@ -909,7 +909,10 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                         const result = await docClient.editSheetData({
                             agent: account,
                             docId: params.docId,
-                            request: params.request,
+                            sheetId: params.sheetId,
+                            startRow: params.startRow ?? 0,
+                            startColumn: params.startColumn ?? 0,
+                            gridData: params.gridData,
                         });
                         return buildToolResult({
                             ok: true,

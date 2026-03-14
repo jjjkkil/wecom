@@ -877,7 +877,7 @@ export const wecomDocToolSchema = {
         {
             type: "object",
             additionalProperties: false,
-            required: ["action", "docId", "request"],
+            required: ["action", "docId", "sheetId", "gridData"],
             properties: {
                 action: { const: "edit_sheet_data" },
                 accountId: accountIdProperty,
@@ -885,24 +885,146 @@ export const wecomDocToolSchema = {
                     ...docIdProperty,
                     description: "在线表格 docid",
                 },
-                request: {
+                sheetId: {
+                    type: "string",
+                    minLength: 1,
+                    description: "工作表 sheet_id",
+                },
+                startRow: {
+                    type: "integer",
+                    minimum: 0,
+                    description: "起始行号（从 0 开始）",
+                },
+                startColumn: {
+                    type: "integer",
+                    minimum: 0,
+                    description: "起始列号（从 0 开始）",
+                },
+                gridData: {
                     type: "object",
-                    description: "编辑表格请求体，按企业微信官方 edit_data 定义填写",
-                    additionalProperties: true,
-                    required: ["sheet_id", "range", "values"],
+                    description: "表格数据，按企业微信官方 GridData 定义填写",
+                    additionalProperties: false,
+                    required: ["rows"],
                     properties: {
-                         sheet_id: { type: "string" },
-                         range: { type: "string" },
-                         values: { 
-                             type: "array",
-                             items: { 
-                                 type: "array",
-                                 items: { 
-                                     type: "object",
-                                     properties: { text: { type: "string" }, url: { type: "string" } }
-                                 }
-                             }
-                         }
+                        startRow: { type: "integer", minimum: 0, description: "起始行号（从 0 开始）" },
+                        startColumn: { type: "integer", minimum: 0, description: "起始列号（从 0 开始）" },
+                        rows: {
+                            type: "array",
+                            minItems: 1,
+                            description: "行数据列表",
+                            items: {
+                                type: "object",
+                                additionalProperties: false,
+                                required: ["values"],
+                                properties: {
+                                    values: {
+                                        type: "array",
+                                        minItems: 1,
+                                        description: "单元格数据列表（CellData 格式）",
+                                        items: {
+                                            type: "object",
+                                            additionalProperties: false,
+                                            required: ["cell_value"],
+                                            properties: {
+                                                cell_value: {
+                                                    type: "object",
+                                                    description: "单元格值（text 或 link 二选一）",
+                                                    additionalProperties: false,
+                                                    oneOf: [
+                                                        { required: ["text"], not: { required: ["link"] } },
+                                                        { required: ["link"], not: { required: ["text"] } }
+                                                    ],
+                                                    properties: {
+                                                        text: { type: "string", description: "文本内容" },
+                                                        link: {
+                                                            type: "object",
+                                                            description: "超链接内容",
+                                                            additionalProperties: false,
+                                                            required: ["text", "url"],
+                                                            properties: {
+                                                                text: { type: "string", description: "链接显示文本" },
+                                                                url: { type: "string", description: "链接地址" }
+                                                            }
+                                                        }
+                                                    }
+                                                },
+                                                cell_format: {
+                                                    type: "object",
+                                                    description: "单元格格式（可选）",
+                                                    additionalProperties: false,
+                                                    properties: {
+                                                        text_format: {
+                                                            type: "object",
+                                                            description: "文本格式",
+                                                            additionalProperties: false,
+                                                            properties: {
+                                                                font: {
+                                                                    type: "string",
+                                                                    description: "字体名称（Microsoft YaHei, SimSun, Arial 等）"
+                                                                },
+                                                                font_size: {
+                                                                    type: "integer",
+                                                                    minimum: 1,
+                                                                    maximum: 72,
+                                                                    description: "字体大小（最大 72）"
+                                                                },
+                                                                bold: {
+                                                                    type: "boolean",
+                                                                    description: "加粗"
+                                                                },
+                                                                italic: {
+                                                                    type: "boolean",
+                                                                    description: "斜体"
+                                                                },
+                                                                strikethrough: {
+                                                                    type: "boolean",
+                                                                    description: "删除线"
+                                                                },
+                                                                underline: {
+                                                                    type: "boolean",
+                                                                    description: "下划线"
+                                                                },
+                                                                color: {
+                                                                    type: "object",
+                                                                    description: "字体颜色（RGBA）",
+                                                                    additionalProperties: false,
+                                                                    properties: {
+                                                                        red: {
+                                                                            type: "integer",
+                                                                            minimum: 0,
+                                                                            maximum: 255,
+                                                                            description: "红色通道"
+                                                                        },
+                                                                        green: {
+                                                                            type: "integer",
+                                                                            minimum: 0,
+                                                                            maximum: 255,
+                                                                            description: "绿色通道"
+                                                                        },
+                                                                        blue: {
+                                                                            type: "integer",
+                                                                            minimum: 0,
+                                                                            maximum: 255,
+                                                                            description: "蓝色通道"
+                                                                        },
+                                                                        alpha: {
+                                                                            type: "integer",
+                                                                            minimum: 0,
+                                                                            maximum: 255,
+                                                                            description: "透明度（255 完全不透明）"
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 },
             },
@@ -930,34 +1052,8 @@ export const wecomDocToolSchema = {
                 },
             },
         },
-        {
-            type: "object",
-            additionalProperties: false,
-            required: ["action", "docId", "requests"],
-            properties: {
-                action: { const: "modify_sheet_properties" },
-                accountId: accountIdProperty,
-                docId: {
-                    ...docIdProperty,
-                    description: "在线表格 docid",
-                },
-                requests: {
-                    type: "array",
-                    minItems: 1,
-                    maxItems: 5,
-                    description: "修改属性请求列表，必须遵循企业微信 modify_sheet_properties 定义",
-                    items: {
-                        type: "object",
-                        oneOf: [
-                            { required: ["add_sheet_request"], properties: { add_sheet_request: addSheetRequest } },
-                            { required: ["update_range_request"], properties: { update_range_request: updateRangeRequest } },
-                            { required: ["delete_dimension_request"], properties: { delete_dimension_request: deleteDimensionRequest } },
-                            { required: ["delete_sheet_request"], properties: { delete_sheet_request: deleteSheetRequest } }
-                        ]
-                    }
-                },
-            },
-        },
+        // Note: batch_update is the underlying API, but users should use edit_sheet_data action instead
+        // The edit_sheet_data action handles conversion to batch_update format internally
         {
             type: "object",
             additionalProperties: false,

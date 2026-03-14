@@ -708,7 +708,7 @@ const ctxPayload = core.channel.reply.finalizeInboundContext({
             ctx: ctxPayload,
             cfg: config,
             replyOptions: {
-                disableBlockStreaming: true,
+                disableBlockStreaming: false,
             },
             dispatcherOptions: {
                 deliver: async (payload: { text?: string }, info: { kind: string }) => {
@@ -735,9 +735,9 @@ const ctxPayload = core.channel.reply.finalizeInboundContext({
                                 touchTransportSession?.({ lastOutboundAt: Date.now(), running: true });
                                 log?.(`[wecom-agent] reply chunk delivered (${info.kind}) to ${fromUser}, len=${chunk.length}`);
                                 
-                                // 强制延时：确保企业微信有足够时间处理顺序
+                                // 强制延时：确保企业微信有足够时间处理顺序（优化：200ms → 50ms）
                                 if (i + MAX_CHUNK_SIZE < text.length) {
-                                    await new Promise(resolve => setTimeout(resolve, 200));
+                                    await new Promise(resolve => setTimeout(resolve, 50));
                                 }
                             } catch (err: unknown) {
                                 const message = err instanceof Error ? `${err.message}${err.cause ? ` (cause: ${String(err.cause)})` : ""}` : String(err);
@@ -756,9 +756,9 @@ const ctxPayload = core.channel.reply.finalizeInboundContext({
                             }
                         }
                         
-                        // 不同 Block 之间也增加一点间隔
+                        // 不同 Block 之间也增加一点间隔（优化：200ms → 50ms）
                         if (info.kind !== "final") {
-                            await new Promise(resolve => setTimeout(resolve, 200));
+                            await new Promise(resolve => setTimeout(resolve, 50));
                         }
                     };
 

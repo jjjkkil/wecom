@@ -631,15 +631,107 @@ export class WecomDocClient {
         return json;
     }
 
-    async editSheetData(params: { agent: ResolvedAgentAccount; docId: string; request: any }) {
-        const { agent, docId, request } = params;
-        const body = { docid: readString(docId), ...readObject(request) };
+    async editSheetData(params: { 
+        agent: ResolvedAgentAccount; 
+        docId: string; 
+        sheetId: string;
+        startRow?: number;
+        startColumn?: number;
+        gridData?: any;
+    }) {
+        const { agent, docId, sheetId, startRow = 0, startColumn = 0, gridData } = params;
+        
+        // Validate required docId
+        const normalizedDocId = readString(docId);
+        if (!normalizedDocId) {
+            throw new Error('docId is required');
+        }
+        
+        // Validate required sheetId
+        const normalizedSheetId = readString(sheetId);
+        if (!normalizedSheetId) {
+            throw new Error('sheetId is required');
+        }
+        
+        // Build GridData per official API
+        // gridData.rows[i].values[j] must be: {cell_value: {text} | {link: {text, url}}, cell_format?: {...}}
+        const finalGridData = {
+            start_row: startRow,
+            start_column: startColumn,
+            rows: (gridData?.rows || []).map((row: any) => ({
+                values: (row.values || []).map((cell: any) => {
+                    // If already CellData format, use as-is
+                    if (cell && typeof cell === 'object' && cell.cell_value) {
+                        return cell;
+                    }
+                    // Otherwise wrap primitive as CellValue
+                    return { cell_value: { text: String(cell ?? '') } };
+                })
+            }))
+        };
+        
+        // Build batch_update request per official API
+        const body = {
+            docid: normalizedDocId,
+            requests: [{
+                update_range_request: {
+                    sheet_id: normalizedSheetId,
+                    grid_data: finalGridData
+                }
+            }]
+        };
+        
         const json = await this.postWecomDocApi({
-            path: "/cgi-bin/wedoc/spreadsheet/edit_data",
-            actionLabel: "edit_data",
+            path: "/cgi-bin/wedoc/spreadsheet/batch_update",
+            actionLabel: "spreadsheet_batch_update",
             agent, body,
         });
         return { raw: json, docId: body.docid as string };
+    }
+    
+    /**
+     * Build CellFormat object per official API
+     */
+    private buildCellFormat(formatData: any): any {
+        const textFormat: any = {};
+        
+        // Font properties
+        if (formatData.font != null) {
+            textFormat.font = String(formatData.font);
+        }
+        if (formatData.font_size != null) {
+            textFormat.font_size = Math.min(72, Math.max(1, Number(formatData.font_size)));
+        }
+        if (formatData.bold != null) {
+            textFormat.bold = Boolean(formatData.bold);
+        }
+        if (formatData.italic != null) {
+            textFormat.italic = Boolean(formatData.italic);
+        }
+        if (formatData.strikethrough != null) {
+            textFormat.strikethrough = Boolean(formatData.strikethrough);
+        }
+        if (formatData.underline != null) {
+            textFormat.underline = Boolean(formatData.underline);
+        }
+        
+        // Color (RGBA)
+        if (formatData.color != null && typeof formatData.color === "object") {
+            const color = formatData.color;
+            textFormat.color = {
+                red: Math.min(255, Math.max(0, Number(color.red ?? 0))),
+                green: Math.min(255, Math.max(0, Number(color.green ?? 0))),
+                blue: Math.min(255, Math.max(0, Number(color.blue ?? 0))),
+                alpha: Math.min(255, Math.max(0, Number(color.alpha ?? 255)))
+            };
+        }
+        
+        // Return empty object if no format properties
+        if (Object.keys(textFormat).length === 0) {
+            return null;
+        }
+        
+        return { text_format: textFormat };
     }
 
     async getSheetData(params: { agent: ResolvedAgentAccount; docId: string; sheetId: string; range: string }) {
