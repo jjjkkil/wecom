@@ -638,8 +638,15 @@ export class WecomDocClient {
         startRow?: number;
         startColumn?: number;
         gridData?: any;
+        values?: any[][]; // Optional 2D array of raw cell values
     }) {
-        const { agent, docId, sheetId, startRow = 0, startColumn = 0, gridData } = params;
+        const { agent, docId, sheetId, startRow = 0, startColumn = 0, gridData, values } = params;
+        
+        // Validate required docId (consistent with getSheetProperties)
+        const normalizedDocId = readString(docId);
+        if (!normalizedDocId) {
+            throw new Error('docId is required and must be a non-empty string');
+        }
         
         // Validate required sheetId
         const normalizedSheetId = readString(sheetId);
@@ -648,7 +655,69 @@ export class WecomDocClient {
         }
         
         // Build GridData with proper structure per WeCom API
-        const gridDataObj = gridData && typeof gridData === "object" ? gridData : {};
+        // If values provided, convert to GridData format (single source of truth)
+        let gridDataObj: any = {};
+        if (values && Array.isArray(values)) {
+            gridDataObj = {
+                startRow,
+                startColumn,
+                rows: values.map((rowValues: any[]) => ({
+                    values: rowValues.map((cell: any) => {
+                        let cellValue: any;
+                        let cellFormat: any;
+                        
+                        // Handle string cells
+                        if (typeof cell === "string") {
+                            cellValue = { text: cell };
+                        }
+                        // Handle null/undefined
+                        else if (!cell || typeof cell !== "object") {
+                            cellValue = { text: String(cell ?? "") };
+                        }
+                        else {
+                            // Handle cell with link (official API format)
+                            if (cell.link && typeof cell.link === "object") {
+                                cellValue = {
+                                    link: {
+                                        text: String(cell.link.text ?? cell.text ?? ""),
+                                        url: String(cell.link.url ?? cell.url ?? "")
+                                    }
+                                };
+                            }
+                            // Handle cell with text only (official API format)
+                            else if (cell.text != null) {
+                                cellValue = { text: String(cell.text) };
+                            }
+                            // Fallback
+                            else {
+                                cellValue = { text: String(cell ?? "") };
+                            }
+                            
+                            // Handle cell_format if provided
+                            if (cell.cell_format && typeof cell.cell_format === "object") {
+                                cellFormat = this.buildCellFormat(cell.cell_format);
+                            }
+                            // Handle inline format properties - only include defined values
+                            else if (cell.font !== undefined || cell.font_size !== undefined || 
+                                     cell.bold !== undefined || cell.italic !== undefined || 
+                                     cell.strikethrough !== undefined || cell.underline !== undefined || 
+                                     cell.color !== undefined) {
+                                cellFormat = this.buildCellFormat(cell);
+                            }
+                        }
+                        
+                        // Return CellData format per official API
+                        const cellData: any = { cell_value: cellValue };
+                        if (cellFormat) {
+                            cellData.cell_format = cellFormat;
+                        }
+                        return cellData;
+                    })
+                }))
+            };
+        } else if (gridData && typeof gridData === "object") {
+            gridDataObj = gridData;
+        }
         
         // Ensure rows have proper CellData structure: [{values: [{cell_value, cell_format}]}]
         // Per official API: CellData = {cell_value: CellValue, cell_format?: CellFormat}
@@ -720,10 +789,10 @@ export class WecomDocClient {
         
         // Build batch_update request per official API
         const body = {
-            docid: readString(docId),
+            docid: normalizedDocId,
             requests: [{
                 update_range_request: {
-                    sheet_id: readString(sheetId),
+                    sheet_id: normalizedSheetId,
                     grid_data: finalGridData
                 }
             }]

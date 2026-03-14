@@ -906,85 +906,16 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                         });
                     }
                     case "edit_sheet_data": {
-                        // Convert simplified user input to official WeCom GridData format
-                        const gridData = params.gridData || {};
-                        
-                        // If user provides values array (2D array of cell data), convert to GridData format
-                        if (Array.isArray(params.values)) {
-                            gridData.rows = params.values.map((rowValues: any[]) => ({
-                                values: rowValues.map((cell: any) => {
-                                    let cellValue: any;
-                                    let cellFormat: any;
-                                    
-                                    // String cell
-                                    if (typeof cell === "string") {
-                                        cellValue = { text: cell };
-                                    }
-                                    // Object cell
-                                    else if (cell && typeof cell === "object") {
-                                        // Object cell with link (official format)
-                                        if (cell.link) {
-                                            cellValue = {
-                                                link: {
-                                                    text: String(cell.link.text ?? cell.text ?? ""),
-                                                    url: String(cell.link.url ?? cell.url ?? "")
-                                                }
-                                            };
-                                        }
-                                        // Object cell with text only
-                                        else if (cell.text != null) {
-                                            cellValue = { text: String(cell.text) };
-                                        }
-                                        // Object cell with url (convert to link)
-                                        else if (cell.url) {
-                                            cellValue = {
-                                                link: {
-                                                    text: String(cell.text ?? cell.url),
-                                                    url: String(cell.url)
-                                                }
-                                            };
-                                        }
-                                        else {
-                                            cellValue = { text: String(cell ?? "") };
-                                        }
-                                        
-                                        // Handle format properties - only include defined values
-                                        if (cell.font !== undefined || cell.font_size !== undefined || 
-                                            cell.bold !== undefined || cell.italic !== undefined || 
-                                            cell.strikethrough !== undefined || cell.underline !== undefined || 
-                                            cell.color !== undefined) {
-                                            cellFormat = {};
-                                            if (cell.font !== undefined) cellFormat.font = cell.font;
-                                            if (cell.font_size !== undefined) cellFormat.font_size = cell.font_size;
-                                            if (cell.bold !== undefined) cellFormat.bold = cell.bold;
-                                            if (cell.italic !== undefined) cellFormat.italic = cell.italic;
-                                            if (cell.strikethrough !== undefined) cellFormat.strikethrough = cell.strikethrough;
-                                            if (cell.underline !== undefined) cellFormat.underline = cell.underline;
-                                            if (cell.color !== undefined) cellFormat.color = cell.color;
-                                        }
-                                    }
-                                    // Fallback
-                                    else {
-                                        cellValue = { text: String(cell ?? "") };
-                                    }
-                                    
-                                    // Return CellData format per official API
-                                    const cellData: any = { cell_value: cellValue };
-                                    if (cellFormat) {
-                                        cellData.cell_format = { text_format: cellFormat };
-                                    }
-                                    return cellData;
-                                })
-                            }));
-                        }
-                        
+                        // Pass through gridData or values to client.ts for normalization
+                        // Normalization happens once in client.ts to avoid duplication
                         const result = await docClient.editSheetData({
                             agent: account,
                             docId: params.docId,
                             sheetId: params.sheetId,
                             startRow: params.startRow ?? 0,
                             startColumn: params.startColumn ?? 0,
-                            gridData,
+                            gridData: params.gridData,
+                            values: params.values, // Pass raw values for client.ts to normalize
                         });
                         return buildToolResult({
                             ok: true,

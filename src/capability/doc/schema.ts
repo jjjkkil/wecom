@@ -930,12 +930,17 @@ export const wecomDocToolSchema = {
                                                     type: "object",
                                                     description: "单元格值（text 或 link 二选一）",
                                                     additionalProperties: false,
+                                                    oneOf: [
+                                                        { required: ["text"], not: { required: ["link"] } },
+                                                        { required: ["link"], not: { required: ["text"] } }
+                                                    ],
                                                     properties: {
                                                         text: { type: "string", description: "文本内容" },
                                                         link: {
                                                             type: "object",
                                                             description: "超链接内容",
                                                             additionalProperties: false,
+                                                            required: ["text", "url"],
                                                             properties: {
                                                                 text: { type: "string", description: "链接显示文本" },
                                                                 url: { type: "string", description: "链接地址" }
