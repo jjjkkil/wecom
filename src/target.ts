@@ -31,42 +31,54 @@ export interface ScopedWecomTarget {
  * 解析原始目标字符串为 WeComTarget 对象。
  * 
  * 逻辑:
- * 1. 移除标准命名空间前缀 (wecom:, qywx: 等)。
- * 2. 检查显式类型前缀 (party:, tag:, group:, user:)。
- * 3. 启发式回退 (无前缀时):
+ * 1. 先检查显式类型前缀 (user:, group:, party:, tag:) —— 优先匹配，不受命名空间前缀影响
+ * 2. 移除标准命名空间前缀 (wecom:, qywx: 等)
+ * 3. 再次检查类型前缀（处理 wecom:user:xxx 格式）
+ * 4. 启发式回退 (无前缀时):
  *    - 以 "wr" 或 "wc" 开头 -> Chat ID (群聊)
- *    - 纯数字 -> 默认 Party ID (部门)；如果 preferUserForDigits 为 true 则视为 User ID
+ *    - 纯数字 -> 默认 User ID (用户)，避免误判部门导致 81013 错误
  *    - 其他 -> User ID (用户)
  * 
- * @param raw - The raw target string (e.g. "party:1", "zhangsan", "wecom:wr123")
+ * @param raw - The raw target string (e.g. "party:1", "zhangsan", "wecom:user:0404777")
  */
 export function resolveWecomTarget(raw: string | undefined, options?: { preferUserForDigits?: boolean }): WecomTarget | undefined {
     if (!raw?.trim()) return undefined;
 
-    // 1. Remove standard namespace prefixes (移除标准命名空间前缀)
-    let clean = raw.trim().replace(/^(wecom-agent|wecom|wechatwork|wework|qywx):/i, "");
+    const trimmed = raw.trim();
 
-    // 2. Explicit Type Prefixes (显式类型前缀)
-    if (/^party:/i.test(clean)) {
-        return { toparty: clean.replace(/^party:/i, "").trim() };
+    // 1. 先检查原始字符串中的类型前缀（处理 user:0404777 无前缀格式）
+    // 这样即使没有 wecom: 前缀，也能正确识别类型
+    if (/^user:/i.test(trimmed)) {
+        return { touser: trimmed.replace(/^user:/i, "").trim() };
     }
-    if (/^dept:/i.test(clean)) {
-        return { toparty: clean.replace(/^dept:/i, "").trim() };
+    if (/^group:/i.test(trimmed) || /^chat:/i.test(trimmed)) {
+        return { chatid: trimmed.replace(/^(group:|chat:)/i, "").trim() };
+    }
+    if (/^party:/i.test(trimmed) || /^dept:/i.test(trimmed)) {
+        return { toparty: trimmed.replace(/^(party:|dept:)/i, "").trim() };
+    }
+    if (/^tag:/i.test(trimmed)) {
+        return { totag: trimmed.replace(/^tag:/i, "").trim() };
+    }
+
+    // 2. Remove standard namespace prefixes (移除标准命名空间前缀)
+    let clean = trimmed.replace(/^(wecom-agent|wecom|wechatwork|wework|qywx):/i, "");
+
+    // 3. 再次检查类型前缀（处理 wecom:user:0404777 格式）
+    if (/^user:/i.test(clean)) {
+        return { touser: clean.replace(/^user:/i, "").trim() };
+    }
+    if (/^group:/i.test(clean) || /^chat:/i.test(clean)) {
+        return { chatid: clean.replace(/^(group:|chat:)/i, "").trim() };
+    }
+    if (/^party:/i.test(clean) || /^dept:/i.test(clean)) {
+        return { toparty: clean.replace(/^(party:|dept:)/i, "").trim() };
     }
     if (/^tag:/i.test(clean)) {
         return { totag: clean.replace(/^tag:/i, "").trim() };
     }
-    if (/^group:/i.test(clean)) {
-        return { chatid: clean.replace(/^group:/i, "").trim() };
-    }
-    if (/^chat:/i.test(clean)) {
-        return { chatid: clean.replace(/^chat:/i, "").trim() };
-    }
-    if (/^user:/i.test(clean)) {
-        return { touser: clean.replace(/^user:/i, "").trim() };
-    }
 
-    // 3. Heuristics (启发式规则)
+    // 4. Heuristics (启发式规则)
 
     // Chat ID typically starts with 'wr' or 'wc'
     // 群聊 ID 通常以 'wr' (外部群) 或 'wc' 开头
@@ -74,20 +86,16 @@ export function resolveWecomTarget(raw: string | undefined, options?: { preferUs
         return { chatid: clean };
     }
 
-    // Pure digits are likely Department IDs (Parties)
-    // 纯数字优先被视为部门 ID (Parties)，方便运维配置 (如 "1" 代表根部门)
-    // 如果必须要发送给纯数字 ID 的用户，请使用显式前缀 "user:1001"
+    // Pure digits: Default to Party (纯数字默认为部门)
+    // 原因：1) 定时任务可能直接配置 to: "1" 发送给根部门
+    //      2) 企业微信官方文档示例使用纯数字表示部门
+    //      3) 用户 ID 应该使用显式前缀 "user:xxx"
+    // 如果需要发送给用户，请使用 "user:0404777" 格式
     if (/^\d+$/.test(clean)) {
-        if (options?.preferUserForDigits) {
-            return { touser: clean };
-        }
         return { toparty: clean };
     }
 
     // Default to User (默认为用户)
-    // 注意：纯数字通常可能是 UserID (内部成员 ID)，也可能是 PartyID。
-    // 为了兼容性，如果没有前缀且不匹配群聊规则，我们将其视为 UserID。
-    // 如果需要明确发送给部门，请使用 "party:1" 前缀。
     return { touser: clean };
 }
 

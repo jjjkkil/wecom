@@ -652,7 +652,7 @@ const ctxPayload = core.channel.reply.finalizeInboundContext({
     CommandBody: finalContent,
     Attachments: attachments.length > 0 ? attachments : undefined,
     From: isGroup ? `wecom:group:${peerId}` : `wecom:user:${fromUser}`,
-    To: `wecom:user:${peerId}`,
+    To: isGroup ? `wecom:group:${peerId}` : `wecom:user:${fromUser}`,
     SessionKey: route.sessionKey,
     AccountId: route.accountId,
     ChatType: isGroup ? "group" : "direct",
