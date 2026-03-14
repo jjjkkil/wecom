@@ -4,6 +4,7 @@ import { generateReqId, type WsFrame, type BaseMessage, type EventMessage, type 
 import type { ReplyHandle, ReplyPayload } from "../../types/index.js";
 
 const PLACEHOLDER_KEEPALIVE_MS = 3000;
+const MAX_KEEPALIVE_MS = 120 * 1000; // Force stop keepalive after 120s if ignored
 
 function isInvalidReqIdError(error: unknown): boolean {
   if (!error || typeof error !== "object") {
@@ -34,10 +35,18 @@ function isTerminalReplyError(error: unknown): boolean {
   return isInvalidReqIdError(error) || isExpiredStreamUpdateError(error) || isAckTimeoutError(error);
 }
 
+// Global registry to track active keepalives by peerId
+interface ActiveKeepalive {
+  reqId: string;
+  stop: () => void;
+}
+const activeKeepalivesByPeer = new Map<string, Set<ActiveKeepalive>>();
+
 export function createBotWsReplyHandle(params: {
   client: WSClient;
   frame: WsFrame<BaseMessage | EventMessage>;
   accountId: string;
+  inboundKind: string;
   placeholderContent?: string;
   autoSendPlaceholder?: boolean;
   onDeliver?: () => void;
@@ -54,20 +63,49 @@ export function createBotWsReplyHandle(params: {
   let streamSettled = false;
   let placeholderInFlight = false;
   let placeholderKeepalive: ReturnType<typeof setInterval> | undefined;
+  let placeholderTimeout: ReturnType<typeof setTimeout> | undefined;
+
+  // Extract peerId for clustering handles
+  const body = params.frame.body as any;
+  const peerId = String(
+    (body?.chattype === "group" ? body?.chatid || body?.from?.userid : body?.from?.userid) || "unknown"
+  );
+  const reqId = params.frame.headers.req_id || "unknown";
+
+  const isEvent = params.inboundKind === "welcome" || params.inboundKind === "event" || params.inboundKind === "template-card-event";
 
   const stopPlaceholderKeepalive = () => {
-    if (!placeholderKeepalive) return;
-    clearInterval(placeholderKeepalive);
-    placeholderKeepalive = undefined;
+    if (placeholderKeepalive) {
+      clearInterval(placeholderKeepalive);
+      placeholderKeepalive = undefined;
+    }
+    if (placeholderTimeout) {
+      clearTimeout(placeholderTimeout);
+      placeholderTimeout = undefined;
+    }
+    
+    // Remove from registry
+    const keepalives = activeKeepalivesByPeer.get(peerId);
+    if (keepalives) {
+      for (const ka of keepalives) {
+        if (ka.reqId === reqId) {
+          keepalives.delete(ka);
+        }
+      }
+      if (keepalives.size === 0) {
+        activeKeepalivesByPeer.delete(peerId);
+      }
+    }
   };
 
   const settleStream = () => {
+    if (streamSettled) return;
     streamSettled = true;
     stopPlaceholderKeepalive();
   };
 
   const sendPlaceholder = () => {
-    if (streamSettled || placeholderInFlight) return;
+    if (streamSettled || placeholderInFlight || isEvent) return;
     placeholderInFlight = true;
     params.client.replyStream(params.frame, resolveStreamId(), placeholderText, false)
       .catch((error) => {
@@ -82,11 +120,39 @@ export function createBotWsReplyHandle(params: {
       });
   };
 
-  if (params.autoSendPlaceholder !== false) {
+  const notifyPeerActive = () => {
+    // A genuine reply or reasoning is happening on THIS handle.
+    // It means the core SDK has chosen this handle to deliver the response.
+    // We can safely terminate all other orphaned keepalives for this peer to prevent infinite loops.
+    const keepalives = activeKeepalivesByPeer.get(peerId);
+    if (keepalives) {
+      for (const ka of keepalives) {
+        if (ka.reqId !== reqId) {
+          ka.stop();
+        }
+      }
+    }
+  };
+
+  if (params.autoSendPlaceholder !== false && !isEvent) {
     sendPlaceholder();
     placeholderKeepalive = setInterval(() => {
       sendPlaceholder();
     }, PLACEHOLDER_KEEPALIVE_MS);
+    
+    // Safety net: force stop keepalive after MAX_KEEPALIVE_MS 
+    // in case the message is completely ignored by the core and never triggers deliver/fail
+    placeholderTimeout = setTimeout(() => {
+      stopPlaceholderKeepalive();
+    }, MAX_KEEPALIVE_MS);
+
+    // Register keepalive
+    let keepalives = activeKeepalivesByPeer.get(peerId);
+    if (!keepalives) {
+      keepalives = new Set();
+      activeKeepalivesByPeer.set(peerId, keepalives);
+    }
+    keepalives.add({ reqId, stop: stopPlaceholderKeepalive });
   }
 
   return {
@@ -103,7 +169,19 @@ export function createBotWsReplyHandle(params: {
       },
     },
     deliver: async (payload: ReplyPayload, info) => {
-      if (payload.isReasoning) return;
+      // Mark this chat as active on this handle
+      notifyPeerActive();
+
+      if (payload.isReasoning) {
+        // We reset the safety timeout if reasoning is actively streaming
+        if (placeholderTimeout && !isEvent) {
+          clearTimeout(placeholderTimeout);
+          placeholderTimeout = setTimeout(() => {
+            stopPlaceholderKeepalive();
+          }, MAX_KEEPALIVE_MS);
+        }
+        return;
+      }
 
       const text = payload.text?.trim();
       if (!text) return;
@@ -121,14 +199,32 @@ export function createBotWsReplyHandle(params: {
             : text
           : accumulatedText || text;
 
+      // Event frames do not support streaming chunks
+      if (isEvent && info.kind !== "final") {
+        return;
+      }
+
       settleStream();
       try {
-        await params.client.replyStream(
-          params.frame,
-          resolveStreamId(),
-          outboundText,
-          info.kind === "final",
-        );
+        if (params.inboundKind === "welcome") {
+          await params.client.replyWelcome(params.frame, {
+            msgtype: "text",
+            text: { content: outboundText },
+          });
+        } else if (isEvent) {
+          // Send push message for other events
+          await params.client.sendMessage(peerId, {
+            msgtype: "markdown",
+            markdown: { content: outboundText },
+          });
+        } else {
+          await params.client.replyStream(
+            params.frame,
+            resolveStreamId(),
+            outboundText,
+            info.kind === "final",
+          );
+        }
       } catch (error) {
         if (isTerminalReplyError(error)) {
           params.onFail?.(error);
@@ -139,14 +235,26 @@ export function createBotWsReplyHandle(params: {
       params.onDeliver?.();
     },
     fail: async (error: unknown) => {
+      notifyPeerActive();
       settleStream();
       if (isTerminalReplyError(error)) {
         params.onFail?.(error);
         return;
       }
       const message = formatErrorMessage(error);
+      const text = `WeCom WS reply failed: ${message}`;
+      
       try {
-        await params.client.replyStream(params.frame, resolveStreamId(), `WeCom WS reply failed: ${message}`, true);
+        if (params.inboundKind === "welcome") {
+            await params.client.replyWelcome(params.frame, { msgtype: "text", text: { content: text }});
+        } else if (isEvent) {
+            await params.client.sendMessage(peerId, {
+              msgtype: "markdown",
+              markdown: { content: text },
+            });
+        } else {
+            await params.client.replyStream(params.frame, resolveStreamId(), text, true);
+        }
       } catch (sendError) {
         params.onFail?.(sendError);
         return;

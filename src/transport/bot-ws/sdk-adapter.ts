@@ -149,6 +149,7 @@ export class BotWsSdkAdapter {
         client,
         frame,
         accountId: this.runtime.account.accountId,
+        inboundKind: event.inboundKind,
         placeholderContent: botAccount.config.streamPlaceholderContent,
         autoSendPlaceholder:
           event.inboundKind === "text" ||

@@ -304,17 +304,13 @@ async function handleMessageCallback(params: AgentWebhookParams): Promise<boolea
             }
         }
 
-        // 针对 ENTER_AGENT / subscribe 等事件进行去重（冷却时间）
+        // Agent 模式下 enter_agent / subscribe 不做任何处理，静默回 success
         if (msgType === "event" && (eventType === "enter_agent" || eventType === "subscribe")) {
-            const eventKey = `${fromUser}:${eventType}`;
-            const ok = rememberAgentEvent(eventKey);
-            if (!ok) {
-                log?.(`[wecom-agent] duplicate/cooldown eventKey=${eventKey} from=${fromUser}; skipped welcome`);
-                res.statusCode = 200;
-                res.setHeader("Content-Type", "text/plain; charset=utf-8");
-                res.end("success");
-                return true;
-            }
+            log?.(`[wecom-agent] ignoring ${eventType} from=${fromUser}; agent does not handle welcome events`);
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("success");
+            return true;
         }
         const content = String(extractContent(msg) ?? "");
 

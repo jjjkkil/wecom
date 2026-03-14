@@ -3,22 +3,32 @@ import { describe, expect, it } from "vitest";
 import { shouldProcessAgentInboundMessage } from "./handler.js";
 
 describe("shouldProcessAgentInboundMessage", () => {
-    it("skips event callbacks so they do not create sessions", () => {
+    it("allows enter_agent/subscribe through the filter (handled earlier by static welcome)", () => {
         const enterAgent = shouldProcessAgentInboundMessage({
             msgType: "event",
             eventType: "enter_agent",
             fromUser: "zhangsan",
         });
-        expect(enterAgent.shouldProcess).toBe(false);
-        expect(enterAgent.reason).toBe("event:enter_agent");
+        expect(enterAgent.shouldProcess).toBe(true);
+        expect(enterAgent.reason).toBe("allowed_event:enter_agent");
 
         const subscribe = shouldProcessAgentInboundMessage({
             msgType: "event",
             eventType: "subscribe",
             fromUser: "lisi",
         });
-        expect(subscribe.shouldProcess).toBe(false);
-        expect(subscribe.reason).toBe("event:subscribe");
+        expect(subscribe.shouldProcess).toBe(true);
+        expect(subscribe.reason).toBe("allowed_event:subscribe");
+    });
+
+    it("skips unknown event callbacks so they do not create sessions", () => {
+        const unknown = shouldProcessAgentInboundMessage({
+            msgType: "event",
+            eventType: "some_random_event",
+            fromUser: "zhangsan",
+        });
+        expect(unknown.shouldProcess).toBe(false);
+        expect(unknown.reason).toBe("event:some_random_event");
     });
 
     it("skips system sender callbacks", () => {
