@@ -1047,34 +1047,8 @@ export const wecomDocToolSchema = {
                 },
             },
         },
-        {
-            type: "object",
-            additionalProperties: false,
-            required: ["action", "docId", "requests"],
-            properties: {
-                action: { const: "batch_update" },
-                accountId: accountIdProperty,
-                docId: {
-                    ...docIdProperty,
-                    description: "在线表格 docid",
-                },
-                requests: {
-                    type: "array",
-                    minItems: 1,
-                    maxItems: 5,
-                    description: "批量更新操作列表（单次最多 5 个操作，详见 UpdateRequest）",
-                    items: {
-                        type: "object",
-                        oneOf: [
-                            { required: ["add_sheet_request"], properties: { add_sheet_request: addSheetRequest } },
-                            { required: ["update_range_request"], properties: { update_range_request: updateRangeRequest } },
-                            { required: ["delete_dimension_request"], properties: { delete_dimension_request: deleteDimensionRequest } },
-                            { required: ["delete_sheet_request"], properties: { delete_sheet_request: deleteSheetRequest } }
-                        ]
-                    }
-                },
-            },
-        },
+        // Note: batch_update is the underlying API, but users should use edit_sheet_data action instead
+        // The edit_sheet_data action handles conversion to batch_update format internally
         {
             type: "object",
             additionalProperties: false,

@@ -641,6 +641,12 @@ export class WecomDocClient {
     }) {
         const { agent, docId, sheetId, startRow = 0, startColumn = 0, gridData } = params;
         
+        // Validate required sheetId
+        const normalizedSheetId = readString(sheetId);
+        if (!normalizedSheetId || normalizedSheetId.trim() === '') {
+            throw new Error('sheetId is required and must be a non-empty string');
+        }
+        
         // Build GridData with proper structure per WeCom API
         const gridDataObj = gridData && typeof gridData === "object" ? gridData : {};
         
@@ -687,8 +693,11 @@ export class WecomDocClient {
                     if (cell.cell_format && typeof cell.cell_format === "object") {
                         cellFormat = this.buildCellFormat(cell.cell_format);
                     }
-                    // Handle inline format properties
-                    else if (cell.bold !== undefined || cell.font_size !== undefined || cell.color !== undefined) {
+                    // Handle inline format properties - only include defined values
+                    else if (cell.font !== undefined || cell.font_size !== undefined || 
+                             cell.bold !== undefined || cell.italic !== undefined || 
+                             cell.strikethrough !== undefined || cell.underline !== undefined || 
+                             cell.color !== undefined) {
                         cellFormat = this.buildCellFormat(cell);
                     }
                 }

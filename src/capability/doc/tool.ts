@@ -948,18 +948,19 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                                             cellValue = { text: String(cell ?? "") };
                                         }
                                         
-                                        // Handle format properties
-                                        if (cell.bold !== undefined || cell.font_size !== undefined || 
-                                            cell.color !== undefined || cell.font !== undefined) {
-                                            cellFormat = {
-                                                font: cell.font,
-                                                font_size: cell.font_size,
-                                                bold: cell.bold,
-                                                italic: cell.italic,
-                                                strikethrough: cell.strikethrough,
-                                                underline: cell.underline,
-                                                color: cell.color
-                                            };
+                                        // Handle format properties - only include defined values
+                                        if (cell.font !== undefined || cell.font_size !== undefined || 
+                                            cell.bold !== undefined || cell.italic !== undefined || 
+                                            cell.strikethrough !== undefined || cell.underline !== undefined || 
+                                            cell.color !== undefined) {
+                                            cellFormat = {};
+                                            if (cell.font !== undefined) cellFormat.font = cell.font;
+                                            if (cell.font_size !== undefined) cellFormat.font_size = cell.font_size;
+                                            if (cell.bold !== undefined) cellFormat.bold = cell.bold;
+                                            if (cell.italic !== undefined) cellFormat.italic = cell.italic;
+                                            if (cell.strikethrough !== undefined) cellFormat.strikethrough = cell.strikethrough;
+                                            if (cell.underline !== undefined) cellFormat.underline = cell.underline;
+                                            if (cell.color !== undefined) cellFormat.color = cell.color;
                                         }
                                     }
                                     // Fallback
