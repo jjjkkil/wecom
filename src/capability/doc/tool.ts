@@ -445,12 +445,13 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                                             });
                                             
                                             // Insert image using uploaded URL
+                                            // Note: version is optional, API handles concurrency
                                             await docClient.updateDocContent({
                                                 agent: account,
                                                 docId: result.docId,
                                                 requests: [{
                                                     insert_image: {
-                                                        image_id: uploadResult.url,  // ✅ Use uploaded URL
+                                                        image_id: uploadResult.url,
                                                         location: { index: 0 },
                                                         width: uploadResult.width,
                                                         height: uploadResult.height
@@ -491,10 +492,12 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                                 }
 
                                 // Step 2: For subsequent items, append with proper paragraph handling
+                                // Per API spec: must get latest version and index before each batch_update
                                 for (let i = 1; i < params.init_content.length; i++) {
                                     const item = params.init_content[i];
                                     
-                                    // Refresh content to get latest document structure
+                                    // Refresh content to get latest document structure and version
+                                    // API requires: version difference ≤ 100 from latest
                                     const currentContent = await docClient.getDocContent({
                                         agent: account,
                                         docId: result.docId,
@@ -502,11 +505,10 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                                     
                                     // Get the end index of the document
                                     const docEndIndex = currentContent.document.end;
+                                    const currentVersion = currentContent.version;
                                     
                                     if (isImageItem(item)) {
-                                        // Insert image: upload first, then create paragraph, then get content, then insert image
-                                        // Official API requires: upload first, then use returned URL as image_id
-                                        // Must call get_content after each update to get correct indices
+                                        // Insert image: upload first, then create paragraph, then insert image
                                         const imgUrl = getImageUrl(item);
                                         
                                         try {
@@ -518,33 +520,29 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                                                 base64_content: base64,
                                             });
                                             
-                                            // Step 2: Create new paragraph for the image
+                                            // Step 2: Create new paragraph and insert image in one batch (2 operations ≤ 30)
+                                            // Both operations use the same index (docEndIndex)
                                             await docClient.updateDocContent({
                                                 agent: account,
                                                 docId: result.docId,
-                                                requests: [{
-                                                    insert_paragraph: {
-                                                        location: { index: docEndIndex }
+                                                version: currentVersion,  // Pass version for concurrency control
+                                                requests: [
+                                                    {
+                                                        insert_paragraph: {
+                                                            location: { index: docEndIndex }
+                                                        }
+                                                    },
+                                                    {
+                                                        insert_image: {
+                                                            image_id: uploadResult.url,
+                                                            location: { index: docEndIndex },
+                                                            width: uploadResult.width,
+                                                            height: uploadResult.height
+                                                        }
                                                     }
-                                                }]
-                                            });
-                                            
-                                            // Step 3: Get updated content to find the new paragraph index
-                                            // Image must be inserted into the paragraph at docEndIndex (the new paragraph)
-                                            await docClient.updateDocContent({
-                                                agent: account,
-                                                docId: result.docId,
-                                                requests: [{
-                                                    insert_image: {
-                                                        image_id: uploadResult.url,  // ✅ Use uploaded URL
-                                                        location: { index: docEndIndex },
-                                                        width: uploadResult.width,
-                                                        height: uploadResult.height
-                                                    }
-                                                }]
+                                                ]
                                             });
                                         } catch (uploadErr) {
-                                            // If upload fails, log error but continue with other content
                                             console.error(`Failed to upload image ${imgUrl}:`, uploadErr);
                                             throw new Error(`Image upload failed: ${uploadErr instanceof Error ? uploadErr.message : String(uploadErr)}`);
                                         }
@@ -552,11 +550,12 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                                         const text = getText(item);
                                         if (!text) continue;
 
-                                        // Insert text: create paragraph first, then insert text into that paragraph
-                                        // The new paragraph is created at docEndIndex, so we insert text at the same index
+                                        // Insert text: create paragraph and insert text in one batch (2 operations ≤ 30)
+                                        // Both operations use the same index (docEndIndex)
                                         await docClient.updateDocContent({
                                             agent: account,
                                             docId: result.docId,
+                                            version: currentVersion,  // Pass version for concurrency control
                                             requests: [
                                                 {
                                                     insert_paragraph: {
