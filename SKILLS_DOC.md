@@ -1535,11 +1535,35 @@
     "docType": "doc",
     "collaborators": [{"userid": "zhangsan"}, {"userid": "lisi"}],
     "init_content": [
-      {"type": "text", "content": "项目计划文档"},
-      {"type": "text", "content": "一、项目目标"},
-      {"type": "text", "content": "二、项目进度"}
+      {"type": "text", "content": "项目计划文档"},  // 第 1 个元素作为标题，自动加粗并独占一行
+      {"type": "text", "content": "一、项目目标"},  // 正文段落
+      {"type": "text", "content": "二、项目进度"}   // 正文段落
     ]
   }
+}
+```
+
+**init_content 格式说明**：
+
+| 元素类型 | 格式 | 说明 |
+|---------|------|------|
+| 文本 | `{"type": "text", "content": "内容"}` 或直接字符串 | 第 1 个元素作为标题（自动加粗），后续作为正文段落 |
+| 图片 | `{"type": "image", "url": "图片 URL"}` | 自动上传并插入到文档 |
+
+**标题和正文格式**：
+- ✅ **第 1 个元素**：自动作为标题，**加粗**并独占一行
+- ✅ **后续元素**：作为正文段落，每个元素独立一段
+- ✅ **图片**：自动上传到企业微信并插入到对应段落
+
+**示例**：
+```json
+{
+  "init_content": [
+    "2024 年度销售报告",                    // 标题（加粗）
+    {"type": "text", "content": "摘要"},     // 正文段落
+    {"type": "image", "url": "https://..."}, // 图片
+    {"type": "text", "content": "详细数据"}  // 正文段落
+  ]
 }
 ```
 
