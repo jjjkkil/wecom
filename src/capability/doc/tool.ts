@@ -429,6 +429,7 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                                     if (isImageItem(firstItem)) {
                                         // First item is image
                                         const imgUrl = getImageUrl(firstItem);
+                                        console.log(`[wecom-doc] Title image URL: "${imgUrl.substring(0, 50)}..."`);
 
                                         try {
                                             const base64 = await downloadImageAsBase64(imgUrl);
@@ -437,6 +438,7 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                                                 docId: result.docId,
                                                 base64_content: base64,
                                             });
+                                            console.log(`[wecom-doc] Title image uploaded: ${uploadResult.width}x${uploadResult.height}`);
 
                                             // Step 1a: Insert paragraph at index 0
                                             await docClient.updateDocContent({
@@ -454,6 +456,8 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                                                 agent: account,
                                                 docId: result.docId,
                                             });
+                                            const paragraphIndex = contentAfterParagraph.document.end - 1;
+                                            console.log(`[wecom-doc] Title paragraph created at index ${paragraphIndex}`);
 
                                             // Step 1c: Insert image at new paragraph index
                                             await docClient.updateDocContent({
@@ -463,13 +467,13 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                                                 requests: [{
                                                     insert_image: {
                                                         image_id: uploadResult.url,
-                                                        location: { index: contentAfterParagraph.document.end - 1 },
+                                                        location: { index: paragraphIndex },
                                                         width: uploadResult.width,
                                                         height: uploadResult.height
                                                     }
                                                 }]
                                             });
-                                            console.log(`[wecom-doc] Title image inserted successfully`);
+                                            console.log(`[wecom-doc] Title image inserted successfully at index ${paragraphIndex}`);
                                         } catch (uploadErr) {
                                             console.error(`[wecom-doc] upload_image_failed: docId=${result.docId.substring(0, 8)}...`, uploadErr instanceof Error ? uploadErr.message : String(uploadErr));
                                             throw new Error(`First image upload failed: ${uploadErr instanceof Error ? uploadErr.message : String(uploadErr)}`);
@@ -562,6 +566,7 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                                     // Step 2c: Insert content into the new paragraph
                                     if (isImageItem(item)) {
                                         const imgUrl = getImageUrl(item);
+                                        console.log(`[wecom-doc] Item ${i} image URL: "${imgUrl.substring(0, 50)}..."`);
 
                                         try {
                                             const base64 = await downloadImageAsBase64(imgUrl);
@@ -570,7 +575,9 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                                                 docId: result.docId,
                                                 base64_content: base64,
                                             });
+                                            console.log(`[wecom-doc] Item ${i} image uploaded: ${uploadResult.width}x${uploadResult.height}`);
 
+                                            // Step 2c: Insert image into the new paragraph
                                             await docClient.updateDocContent({
                                                 agent: account,
                                                 docId: result.docId,
@@ -584,7 +591,7 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                                                     }
                                                 }]
                                             });
-                                            console.log(`[wecom-doc] Item ${i} image inserted successfully`);
+                                            console.log(`[wecom-doc] Item ${i} image inserted successfully at index ${paragraphIndex}`);
                                         } catch (uploadErr) {
                                             console.error(`[wecom-doc] upload_image_failed: docId=${result.docId.substring(0, 8)}...`, uploadErr instanceof Error ? uploadErr.message : String(uploadErr));
                                             throw new Error(`Image upload failed: ${uploadErr instanceof Error ? uploadErr.message : String(uploadErr)}`);
