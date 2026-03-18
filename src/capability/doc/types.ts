@@ -85,10 +85,10 @@ export interface Spacing {
 }
 
 export enum LineSpacingRule {
+    UNSPECIFIED = "LINE_SPACING_RULE_UNSPECIFIED",
     AUTO = "LINE_SPACING_RULE_AUTO",
     EXACT = "LINE_SPACING_RULE_EXACT",
-    AT_LEAST = "LINE_SPACING_RULE_AT_LEAST",
-    UNSPECIFIED = "PAGE_ORIENTATION_UNSPECIFIED" // Note: User text had a copy-paste error here, listing PAGE_ORIENTATION_UNSPECIFIED
+    AT_LEAST = "LINE_SPACING_RULE_AT_LEAST"
 }
 
 export interface Indent {
@@ -330,7 +330,7 @@ export interface Range {
 
 export interface ReplaceTextRequest {
     text: string;
-    ranges: Range[];
+    ranges: Range[];  // 最多 10 个范围
 }
 
 export interface InsertTextRequest {
@@ -365,13 +365,7 @@ export interface InsertParagraphRequest {
 
 export interface TextProperty {
     bold?: boolean;
-    italics?: boolean; // User text says "italics", Schema says "italic". User text for RunProperty says "italics", UpdateTextProperty example says "bold" but doesn't list italics explicitly in example, but RunProperty does. Standard WeCom API is "italics"? My schema says "italic". I will use "italics" as per user provided text for RunProperty, but UpdateTextProperty might differ.
-    // User text for TextProperty example: bold, color, background_color.
-    // RunProperty has "italics".
-    // I will check the user provided TextProperty definition again.
-    // "blod" (typo in user text), color, background_color.
-    // It doesn't list italics in TextProperty section, but RunProperty does.
-    // I will support what is likely correct.
+    italics?: boolean;
     underline?: boolean;
     strikethrough?: boolean;
     color?: string;
@@ -381,7 +375,7 @@ export interface TextProperty {
 
 export interface UpdateTextPropertyRequest {
     text_property: TextProperty;
-    ranges: Range[];
+    ranges: Range[];  // 最多 10 个范围
 }
 
 export interface UpdateRequest {
@@ -398,6 +392,15 @@ export interface UpdateRequest {
 export interface BatchUpdateDocResponse {
     errcode: number;
     errmsg: string;
+    responses?: Array<{
+        insert_text_response?: { end_location: Location };
+        delete_content_response?: { end_location: Location };
+        replace_text_response?: { occurances: number };
+        insert_image_response?: { image_id: string };
+        insert_table_response?: { table_id: string };
+        insert_paragraph_response?: { paragraph_id: string };
+        update_text_property_response?: Record<string, never>;
+    }>;
 }
 
 export interface GetDocContentResponse {
@@ -412,20 +415,20 @@ export interface GetDocContentResponse {
 export interface FormQuestionOption {
     key: number;           // 必填，选项 key 从 1 开始
     value: string;         // 必填，选项内容
-    status?: number;       // 1 正常，2 删除
+    status?: number;       // 1 正常，2 删除。创建时不传则自动填充为 1
 }
 
 export interface FormQuestion {
     question_id: number;                           // 必填，问题 ID 从 1 开始（家校从 2 开始）
     title: string;                                 // 必填，问题标题
     pos: number;                                   // 必填，问题序号从 1 开始
-    status?: number;                               // 1 正常，2 删除
+    status?: number;                               // 1 正常，2 删除。创建时不传则自动填充为 1
     reply_type: number;                            // 必填，问题类型（1-22）
     must_reply: boolean;                           // 必填，是否必答
     note?: string;                                 // 可选，备注
     placeholder?: string;                          // 可选，输入提示
     question_extend_setting?: FormQuestionExtendSetting;  // 可选，题型扩展设置
-    option_item?: FormQuestionOption[];            // 单选/多选/下拉列表必填
+    option_item?: FormQuestionOption[];            // 单选/多选/下拉列表必填，创建时不传 status 则自动填充为 1
 }
 
 export interface FormQuestionExtendSetting {
@@ -673,4 +676,117 @@ export interface GetSheetRangeDataResponse {
     data: {
         result: GridData;
     };
+}
+
+// --- Smart Table Records & Fields Types ---
+
+export interface SmartTableRecord {
+    record_id: string;
+    create_time?: string;
+    update_time?: string;
+    values: Record<string, any>;
+    creator_name?: string;
+    updater_name?: string;
+}
+
+export interface SmartTableGetRecordsResponse {
+    errcode: number;
+    errmsg: string;
+    records?: SmartTableRecord[];
+    total?: number;
+    has_more?: boolean;
+    next?: number;
+    ver?: number;
+}
+
+export interface SmartTableField {
+    field_id: string;
+    field_title: string;
+    field_type: string;
+    property_number?: any;
+    property_checkbox?: any;
+    property_date_time?: any;
+    property_attachment?: any;
+    property_user?: any;
+    property_url?: any;
+    property_select?: any;
+    property_created_time?: any;
+    property_modified_time?: any;
+    property_progress?: any;
+    property_single_select?: any;
+    property_reference?: any;
+    property_location?: any;
+    property_auto_number?: any;
+    property_currency?: any;
+    property_ww_group?: any;
+    property_percentage?: any;
+    property_barcode?: any;
+    property_image?: any;
+    property_phone_number?: any;
+    property_email?: any;
+}
+
+export interface SmartTableGetFieldsResponse {
+    errcode: number;
+    errmsg: string;
+    fields?: SmartTableField[];
+    total?: number;
+    has_more?: boolean;
+    next?: number;
+}
+
+export interface SmartTableView {
+    view_id: string;
+    view_title: string;
+    view_type: string;
+    is_visible?: boolean;
+    type?: string;
+    property?: any;
+}
+
+export interface SmartTableGetViewsResponse {
+    errcode: number;
+    errmsg: string;
+    views?: SmartTableView[];
+    total?: number;
+    has_more?: boolean;
+    next?: number;
+}
+
+export interface SmartTableFieldGroup {
+    field_group_id: string;
+    name: string;
+    children?: { field_id: string }[];
+}
+
+export interface SmartTableGetGroupsResponse {
+    errcode: number;
+    errmsg: string;
+    field_groups?: SmartTableFieldGroup[];
+    total?: number;
+    has_more?: boolean;
+    next?: number;
+}
+
+export interface SmartTableSheetPriv {
+    sheet_id: string;
+    priv: number;
+    can_insert_record?: boolean;
+    can_delete_record?: boolean;
+    can_create_modify_delete_view?: boolean;
+    field_priv?: any;
+    record_priv?: any;
+    clear?: boolean;
+}
+
+export interface SmartTableGetSheetPrivResponse {
+    errcode: number;
+    errmsg: string;
+    rule_list?: any[];
+}
+
+export interface SmartTableCreateRuleResponse {
+    errcode: number;
+    errmsg: string;
+    rule_id?: number;
 }

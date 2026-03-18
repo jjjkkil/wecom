@@ -482,33 +482,61 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                   return false;
                 };
 
-                // Helper: get image URL from content item
-                const getImageUrl = (item: any): string => {
-                  if (typeof item === "object" && item !== null) {
-                    return item.url || item.content || "";
-                  }
-                  return String(item);
-                };
+                                // Helper: get image URL from content item
+                                const getImageUrl = (item: any): string => {
+                                    if (typeof item === "object" && item !== null) {
+                                        return item.url || item.content || "";
+                                    }
+                                    return String(item);
+                                };
 
-                // Helper: download image and convert to base64
-                const downloadImageAsBase64 = async (
-                  url: string,
-                ): Promise<string> => {
-                  const response = await fetch(url);
-                  if (!response.ok) {
-                    throw new Error(`Failed to download image: ${url}`);
-                  }
-                  const arrayBuffer = await response.arrayBuffer();
-                  return Buffer.from(arrayBuffer).toString("base64");
-                };
+                                // Helper: get text from content item
+                                const getText = (item: any): string => {
+                                    if (typeof item === "object" && item !== null) {
+                                        return item.content || item.text || "";
+                                    }
+                                    return String(item);
+                                };
 
-                // Helper: get text from content item
-                const getText = (item: any): string => {
-                  if (typeof item === "object" && item !== null) {
-                    return item.content || item.text || "";
-                  }
-                  return String(item);
-                };
+                                // Helper: download image from URL or read local file and convert to base64
+                                const getImageAsBase64 = async (imageSource: string): Promise<string> => {
+                                    // Check if it's a local file path or remote URL
+                                    const isLocalFile = !imageSource.startsWith('http') && !imageSource.startsWith('data:');
+                                    
+                                    if (isLocalFile) {
+                                        // Local file path - read using Node.js fs
+                                        const fs = await import('fs');
+                                        const path = await import('path');
+                                        
+                                        // Resolve to absolute path if relative
+                                        const absolutePath = path.isAbsolute(imageSource) 
+                                            ? imageSource 
+                                            : path.join(process.cwd(), imageSource);
+                                        
+                                        if (!fs.existsSync(absolutePath)) {
+                                            throw new Error(`Local image file not found: ${absolutePath}`);
+                                        }
+                                        
+                                        const fileBuffer = fs.readFileSync(absolutePath);
+                                        return fileBuffer.toString("base64");
+                                    } else if (imageSource.startsWith('data:')) {
+                                        // Data URL (base64 already)
+                                        const matches = imageSource.match(/^data:image\/(?:png|jpeg|gif|webp);base64,(.*)$/);
+                                        if (matches && matches[1]) {
+                                            return matches[1];
+                                        }
+                                        throw new Error('Invalid data URL format');
+                                    } else {
+                                        // Remote URL - download first
+                                        console.log(`[wecom-doc] Downloading remote image: ${imageSource.substring(0, 50)}...`);
+                                        const response = await fetch(imageSource);
+                                        if (!response.ok) {
+                                            throw new Error(`Failed to download image: ${response.status} ${response.statusText}`);
+                                        }
+                                        const arrayBuffer = await response.arrayBuffer();
+                                        return Buffer.from(arrayBuffer).toString("base64");
+                                    }
+                                };
 
                 // Step 1: Insert first paragraph (title) at index 0
                 if (params.init_content[0]) {
@@ -517,14 +545,15 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                     // First item is image - upload first, then insert at index 0
                     const imgUrl = getImageUrl(firstItem);
 
-                    try {
-                      // Upload image to WeCom to get proper image_id
-                      const base64 = await downloadImageAsBase64(imgUrl);
-                      const uploadResult = await docClient.uploadDocImage({
-                        agent: account,
-                        docId: result.docId,
-                        base64_content: base64,
-                      });
+                                        try {
+                                            // Upload image to WeCom to get proper image_id
+                                            const base64 = await getImageAsBase64(imgUrl);
+                                            const uploadResult = await docClient.uploadDocImage({
+                                                agent: account,
+                                                docId: result.docId,
+                                                base64_content: base64,
+                                            });
+                                            console.log(`[wecom-doc] Title image uploaded: ${uploadResult.width}x${uploadResult.height}`);
 
                       // Insert image using uploaded URL
                       // Note: version is optional, API handles concurrency
@@ -602,18 +631,19 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
                   const docEndIndex = currentContent.document.end;
                   const currentVersion = currentContent.version;
 
-                  if (isImageItem(item)) {
-                    // Insert image: upload first, then create paragraph, then insert image
-                    const imgUrl = getImageUrl(item);
+                                    if (isImageItem(item)) {
+                                        // Insert image
+                                        const imgUrl = getImageUrl(item);
 
-                    try {
-                      // Step 1: Download and upload image to WeCom
-                      const base64 = await downloadImageAsBase64(imgUrl);
-                      const uploadResult = await docClient.uploadDocImage({
-                        agent: account,
-                        docId: result.docId,
-                        base64_content: base64,
-                      });
+                                        try {
+                                            // Upload image to WeCom
+                                            const base64 = await getImageAsBase64(imgUrl);
+                                            const uploadResult = await docClient.uploadDocImage({
+                                                agent: account,
+                                                docId: result.docId,
+                                                base64_content: base64,
+                                            });
+                                            console.log(`[wecom-doc] Item ${i} image uploaded: ${uploadResult.width}x${uploadResult.height}`);
 
                       // Step 2: Create new paragraph and insert image in one batch (2 operations ≤ 30)
                       // Per API spec: all indices are based on the same document snapshot
@@ -682,960 +712,688 @@ export function registerWecomDocTools(api: OpenClawPluginApi) {
               }
             }
 
-            let accessResult: any = null;
-            if (
-              (Array.isArray(params.viewers) && params.viewers.length > 0) ||
-              explicitCollaborators.length > 0
-            ) {
-              try {
-                accessResult = await docClient.grantDocAccess({
-                  agent: account,
-                  docId: result.docId,
-                  viewers: params.viewers,
-                  collaborators: explicitCollaborators,
-                });
-              } catch (err) {
-                return buildToolResult({
-                  ok: false,
-                  partial: true,
-                  action: "create",
-                  accountId: account.accountId,
-                  resourceType: result.docTypeLabel,
-                  canonicalDocId: result.docId,
-                  docId: result.docId,
-                  title: readString(params.docName),
-                  url: result.url || undefined,
-                  summary: `已创建${mapDocTypeLabel(result.docType)}"${readString(params.docName)}"（docId: ${result.docId}），但权限授予失败`,
-                  usageHint: buildDocIdUsageHint(result.docId) || undefined,
-                  error: err instanceof Error ? err.message : String(err),
-                  raw: { create: result.raw },
-                });
-              }
-            }
-            return buildToolResult({
-              ok: true,
-              action: "create",
-              accountId: account.accountId,
-              resourceType: result.docTypeLabel,
-              canonicalDocId: result.docId,
-              docId: result.docId,
-              title: readString(params.docName),
-              url: result.url || undefined,
-              summary: accessResult
-                ? `已创建${mapDocTypeLabel(result.docType)}"${readString(params.docName)}"（docId: ${result.docId}）；${summarizeDocAccess(accessResult)}` +
-                  (contentResult ? `；内容填充: ${contentResult}` : "")
-                : `已创建${mapDocTypeLabel(result.docType)}"${readString(params.docName)}"（docId: ${result.docId}）` +
-                  (contentResult ? `；内容填充: ${contentResult}` : ""),
-              usageHint: buildDocIdUsageHint(result.docId) || undefined,
-              raw: accessResult
-                ? { create: result.raw, access: accessResult.raw }
-                : result.raw,
-            });
-          }
-          case "rename": {
-            const result = await docClient.renameDoc({
-              agent: account,
-              docId: params.docId,
-              newName: params.newName,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "rename",
-              accountId: account.accountId,
-              docId: result.docId,
-              title: result.newName,
-              summary: `文档已重命名为"${result.newName}"`,
-              raw: result.raw,
-            });
-          }
-          case "copy": {
-            const result = await docClient.copyDoc({
-              agent: account,
-              docId: params.docId,
-              newName: params.newName,
-              spaceId: params.spaceId,
-              fatherId: params.fatherId,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "copy",
-              accountId: account.accountId,
-              docId: result.docId,
-              summary: `文档已成功复制，新 docId: ${result.docId}`,
-              raw: result.raw,
-            });
-          }
-          case "get_info": {
-            const result = await docClient.getDocBaseInfo({
-              agent: account,
-              docId: params.docId,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "get_info",
-              accountId: account.accountId,
-              docId: params.docId,
-              title: readString(result.info?.doc_name) || undefined,
-              resourceType:
-                Number(result.info?.doc_type) === 10
-                  ? "smart_table"
-                  : Number(result.info?.doc_type) === 4
-                    ? "spreadsheet"
-                    : "doc",
-              summary: summarizeDocInfo(result.info),
-              raw: result.raw,
-            });
-          }
-          case "share": {
-            const result = await docClient.shareDoc({
-              agent: account,
-              docId: params.docId,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "share",
-              accountId: account.accountId,
-              canonicalDocId: params.docId,
-              docId: params.docId,
-              url: result.shareUrl || undefined,
-              summary: result.shareUrl
-                ? `文档分享链接已获取（docId: ${params.docId}）`
-                : `文档分享接口调用成功（docId: ${params.docId}）`,
-              usageHint: buildDocIdUsageHint(params.docId) || undefined,
-              raw: result.raw,
-            });
-          }
-          case "get_auth": {
-            const result = await docClient.getDocAuth({
-              agent: account,
-              docId: params.docId,
-            });
-            const diagnosis = buildDocAuthDiagnosis(
-              result,
-              toolContext?.senderId,
-            );
-            return buildToolResult({
-              ok: true,
-              action: "get_auth",
-              accountId: account.accountId,
-              canonicalDocId: params.docId,
-              docId: params.docId,
-              summary: summarizeDocAuth(result),
-              diagnosis,
-              raw: result.raw,
-            });
-          }
-          case "diagnose_auth": {
-            const result = await docClient.getDocAuth({
-              agent: account,
-              docId: params.docId,
-            });
-            const diagnosis = buildDocAuthDiagnosis(
-              result,
-              toolContext?.senderId,
-            );
-            return buildToolResult({
-              ok: true,
-              action: "diagnose_auth",
-              accountId: account.accountId,
-              canonicalDocId: params.docId,
-              docId: params.docId,
-              summary: summarizeDocAuthDiagnosis(diagnosis),
-              diagnosis,
-              raw: result.raw,
-            });
-          }
-          case "validate_share_link": {
-            const result = await inspectWecomShareLink({
-              shareUrl: params.shareUrl,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "validate_share_link",
-              accountId: account.accountId,
-              url: result.diagnosis.finalUrl || params.shareUrl,
-              summary: summarizeShareLinkDiagnosis(result.diagnosis),
-              diagnosis: result.diagnosis,
-              raw: result.raw,
-            });
-          }
-          case "delete": {
-            const result = await docClient.deleteDoc({
-              agent: account,
-              docId: params.docId,
-              formId: params.formId,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "delete",
-              accountId: account.accountId,
-              docId: result.docId || undefined,
-              formId: result.formId || undefined,
-              summary: result.formId ? "收集表已删除" : "文档已删除",
-              raw: result.raw,
-            });
-          }
-          case "set_join_rule": {
-            const result = await docClient.setDocJoinRule({
-              agent: account,
-              docId: params.docId,
-              request: params.request,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "set_join_rule",
-              accountId: account.accountId,
-              docId: result.docId,
-              summary: "文档查看规则已更新",
-              raw: result.raw,
-            });
-          }
-          case "set_member_auth": {
-            const result = await docClient.setDocMemberAuth({
-              agent: account,
-              docId: params.docId,
-              request: params.request,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "set_member_auth",
-              accountId: account.accountId,
-              docId: result.docId,
-              summary: "文档通知范围及成员权限已更新",
-              raw: result.raw,
-            });
-          }
-          case "grant_access": {
-            const result = await docClient.grantDocAccess({
-              agent: account,
-              docId: params.docId,
-              viewers: params.viewers,
-              collaborators: params.collaborators,
-              removeViewers: params.removeViewers,
-              removeCollaborators: params.removeCollaborators,
-              authLevel: params.auth,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "grant_access",
-              accountId: account.accountId,
-              docId: result.docId,
-              summary: summarizeDocAccess(result),
-              raw: result.raw,
-            });
-          }
-          case "add_collaborators": {
-            const result = await docClient.addDocCollaborators({
-              agent: account,
-              docId: params.docId,
-              collaborators: params.collaborators,
-              auth: params.auth,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "add_collaborators",
-              accountId: account.accountId,
-              docId: result.docId,
-              summary: `协作者已添加：${result.addedCollaboratorCount ?? 0}`,
-              raw: result.raw,
-            });
-          }
-          case "get_content": {
-            const result = await docClient.getDocContent({
-              agent: account,
-              docId: params.docId,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "get_content",
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "文档内容已获取",
-              raw: result.raw,
-            });
-          }
-          case "update_content": {
-            const batchMode = params.batchMode === true;
-
-            const result = await docClient.updateDocContent({
-              agent: account,
-              docId: params.docId,
-              requests: params.requests,
-              version: params.version,
-              batchMode: batchMode,
-            });
-
-            return buildToolResult({
-              ok: true,
-              action: "update_content",
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: `文档内容已更新（${batchMode ? "批量" : "顺序"}模式）`,
-              raw: result.raw,
-            });
-          }
-          case "set_safety_setting": {
-            const result = await docClient.setDocSafetySetting({
-              agent: account,
-              docId: params.docId,
-              request: params.request,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "set_safety_setting",
-              accountId: account.accountId,
-              docId: result.docId,
-              summary: "文档安全设置已更新",
-              raw: result.raw,
-            });
-          }
-          case "get_doc_security_setting": {
-            const result = await docClient.getDocAuth({
-              agent: account,
-              docId: params.docId,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "get_doc_security_setting",
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "文档安全设置已获取",
-              details: result.secureSetting,
-              raw: result.raw,
-            });
-          }
-          case "mod_doc_security_setting": {
-            // Alias to setDocSafetySetting logic
-            const result = await docClient.setDocSafetySetting({
-              agent: account,
-              docId: params.docId,
-              request: params.setting,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "mod_doc_security_setting",
-              accountId: account.accountId,
-              docId: result.docId,
-              summary: "文档安全设置已更新",
-              raw: result.raw,
-            });
-          }
-          case "mod_doc_member_notified_scope": {
-            const result = await docClient.modDocMemberNotifiedScope({
-              agent: account,
-              docId: params.docId,
-              notified_scope_type: params.notified_scope_type,
-              notified_member_list: params.notified_member_list,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "mod_doc_member_notified_scope",
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "文档成员通知范围已更新",
-              raw: result,
-            });
-          }
-          case "create_collect": {
-            // 创建收集表（表单）
-            // 参考 API 规范文档：E8_AF_B7_E4_B8_A5_E6_A0_BC_E6_8C_89_E7_85_A7_E4_BB_A5_E4_B8_---099c30ec-70bd-4e5b-ae03-212de0226a25.docx
-            try {
-              const result = await docClient.createCollect({
-                agent: account,
-                formInfo: params.formInfo,
-                spaceId: params.spaceId,
-                fatherId: params.fatherId,
-              });
-              const title = readString(result.title);
-              return buildToolResult({
-                ok: true,
-                action: "create_collect",
-                accountId: account.accountId,
-                formId: result.formId,
-                title: title || undefined,
-                summary: title
-                  ? `已创建收集表"${title}"（formId: ${result.formId}）`
-                  : `已创建收集表（formId: ${result.formId}）`,
-                raw: result.raw,
-              });
-            } catch (err) {
-              // 提供更详细的错误提示
-              const errorMsg = err instanceof Error ? err.message : String(err);
-              const hint = `
-创建收集表失败。请检查以下必填项：
-- form_title: 收集表标题（必填）
-- form_question.items: 问题数组（必填，≤200 个）
-- 每个问题必须包含：question_id, title, pos, reply_type, must_reply
-- 单选/多选/下拉列表必须提供 option_item 数组
-- reply_type 对照表：1 文本，2 单选，3 多选，5 位置，9 图片，10 文件，11 日期，14 时间，15 下拉列表，16 体温，17 签名，18 部门，19 成员，22 时长
-
-错误详情：${errorMsg}`;
-              return buildToolResult({
-                ok: false,
-                action: "create_collect",
-                accountId: account.accountId,
-                error: errorMsg,
-                summary: "创建收集表失败",
-                hint: hint.trim(),
-                raw: {},
-              });
-            }
-          }
-          case "modify_collect": {
-            const result = await docClient.modifyCollect({
-              agent: account,
-              oper: params.oper,
-              formId: params.formId,
-              formInfo: params.formInfo,
-            });
-            const title = readString(result.title);
-            return buildToolResult({
-              ok: true,
-              action: "modify_collect",
-              accountId: account.accountId,
-              formId: result.formId,
-              title: title || undefined,
-              summary: title
-                ? `收集表已更新（${result.oper}）："${title}"`
-                : `收集表已更新（${result.oper}）`,
-              raw: result.raw,
-            });
-          }
-          case "get_form_info": {
-            const result = await docClient.getFormInfo({
-              agent: account,
-              formId: params.formId,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "get_form_info",
-              accountId: account.accountId,
-              formId: params.formId,
-              title: readString(result.formInfo?.form_title) || undefined,
-              summary: summarizeFormInfo(result),
-              raw: result.raw,
-            });
-          }
-          case "get_form_answer": {
-            const result = await docClient.getFormAnswer({
-              agent: account,
-              repeatedId: params.repeatedId,
-              answerIds: params.answerIds,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "get_form_answer",
-              accountId: account.accountId,
-              repeatedId: params.repeatedId,
-              summary: summarizeFormAnswer(result),
-              raw: result.raw,
-            });
-          }
-          case "get_form_statistic": {
-            const result = await docClient.getFormStatistic({
-              agent: account,
-              requests: params.requests,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "get_form_statistic",
-              accountId: account.accountId,
-              summary: summarizeFormStatistic(result),
-              raw: result.raw,
-            });
-          }
-          case "get_sheet_properties": {
-            const result = await docClient.getSheetProperties({
-              agent: account,
-              docId: params.docId,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "get_sheet_properties",
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: summarizeSheetProperties(result),
-              raw: result.raw,
-            });
-          }
-          case "edit_sheet_data": {
-            const result = await docClient.editSheetData({
-              agent: account,
-              docId: params.docId,
-              sheetId: params.sheetId,
-              startRow: params.startRow ?? 0,
-              startColumn: params.startColumn ?? 0,
-              gridData: params.gridData,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "edit_sheet_data",
-              accountId: account.accountId,
-              docId: result.docId,
-              summary: "在线表格数据已编辑",
-              raw: result.raw,
-            });
-          }
-          case "get_sheet_data": {
-            const result = await docClient.getSheetData({
-              agent: account,
-              docId: params.docId,
-              sheetId: params.sheetId,
-              range: params.range,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "get_sheet_data",
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "在线表格数据已读取",
-              data: result.data,
-              raw: result.raw,
-            });
-          }
-          case "modify_sheet_properties": {
-            const result = await docClient.modifySheetProperties({
-              agent: account,
-              docId: params.docId,
-              requests: params.requests,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "modify_sheet_properties",
-              accountId: account.accountId,
-              docId: result.docId,
-              summary: "在线表格属性已修改",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_add_sheet": {
-            const result = await docClient.smartTableAddSheet({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格子表已添加",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_del_sheet": {
-            const result = await docClient.smartTableDelSheet({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格子表已删除",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_update_sheet": {
-            const result = await docClient.smartTableUpdateSheet({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格子表已更新",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_add_view": {
-            const result = await docClient.smartTableAddView({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格视图已添加",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_del_view": {
-            const result = await docClient.smartTableDelView({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格视图已删除",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_get_views": {
-            const result = await docClient.smartTableOperate({
-              agent: account,
-              docId: params.docId,
-              operation: "get_views",
-              bodyData: { sheet_id: params.sheetId },
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格视图列表已获取",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_add_fields": {
-            const result = await docClient.smartTableAddFields({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格字段已添加",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_del_fields": {
-            const result = await docClient.smartTableDelFields({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格字段已删除",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_update_fields": {
-            const result = await docClient.smartTableUpdateFields({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格字段已更新",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_update_view": {
-            const result = await docClient.smartTableUpdateView({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格视图已更新",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_get_fields": {
-            const result = await docClient.smartTableOperate({
-              agent: account,
-              docId: params.docId,
-              operation: "get_fields",
-              bodyData: { sheet_id: params.sheetId, view_id: params.view_id },
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格字段列表已获取",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_add_group": {
-            const result = await docClient.smartTableAddGroup({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格编组已添加",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_del_group": {
-            const result = await docClient.smartTableDelGroup({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格编组已删除",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_update_group": {
-            const result = await docClient.smartTableUpdateGroup({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格编组已更新",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_get_groups": {
-            const result = await docClient.smartTableGetGroups({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格编组列表已获取",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_add_external_records": {
-            const result = await docClient.smartTableAddExternalRecords({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格外部记录已添加",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_update_external_records": {
-            const result = await docClient.smartTableUpdateExternalRecords({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格外部记录已更新",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_add_records": {
-            const result = await docClient.smartTableAddRecords({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格记录已添加",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_update_records": {
-            const result = await docClient.smartTableUpdateRecords({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格记录已更新",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_del_records": {
-            const result = await docClient.smartTableDelRecords({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格记录已删除",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_get_records": {
-            const result = await docClient.smartTableGetRecords({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格记录列表已获取",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_get_sheets": {
-            const result = await docClient.smartTableGetSheets({
-              agent: account,
-              docId: params.docId,
-            });
-            return buildToolResult({
-              ok: true,
-              action: "smartsheet_get_sheets",
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: `智能表格子表列表已获取：${result.sheets.length} 个`,
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_get_sheet_priv": {
-            const result = await docClient.smartTableGetSheetPriv({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格子表权限已获取",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_update_sheet_priv": {
-            const result = await docClient.smartTableUpdateSheetPriv({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格子表权限已更新",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_create_rule": {
-            const result = await docClient.smartTableCreateRule({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: `智能表格成员额外权限规则已创建 (rule_id: ${result.rule_id})`,
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_mod_rule_member": {
-            const result = await docClient.smartTableModRuleMember({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格成员额外权限成员已更新",
-              raw: result.raw,
-            });
-          }
-          case "smartsheet_delete_rule": {
-            const result = await docClient.smartTableDeleteRule({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              docId: params.docId,
-              summary: "智能表格成员额外权限规则已删除",
-              raw: result.raw,
-            });
-          }
-          case "doc_assign_advanced_account": {
-            const result = await docClient.assignDocAdvancedAccount({
-              agent: account,
-              userid_list: params.userid_list,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              summary: summarizeAdvancedAccount(result.raw, "assign"),
-              raw: result.raw,
-            });
-          }
-          case "doc_cancel_advanced_account": {
-            const result = await docClient.cancelDocAdvancedAccount({
-              agent: account,
-              userid_list: params.userid_list,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              summary: summarizeAdvancedAccount(result.raw, "cancel"),
-              raw: result.raw,
-            });
-          }
-          case "doc_get_advanced_account_list": {
-            const result = await docClient.getDocAdvancedAccountList({
-              agent: account,
-              ...params,
-            });
-            return buildToolResult({
-              ok: true,
-              action,
-              accountId: account.accountId,
-              summary: summarizeAdvancedAccount(result, "list"),
-              raw: result.raw,
-            });
-          }
-          case "upload_doc_image": {
-            const filePath = params.file_path;
-            if (!fs.existsSync(filePath)) {
-              throw new Error(`File not found: ${filePath}`);
-            }
-            const fileContent = fs.readFileSync(filePath);
-            const base64Content = fileContent.toString("base64");
+                        let accessResult: any = null;
+                        if ((Array.isArray(params.viewers) && params.viewers.length > 0) || explicitCollaborators.length > 0) {
+                            try {
+                                accessResult = await docClient.grantDocAccess({
+                                    agent: account,
+                                    docId: result.docId,
+                                    viewers: params.viewers,
+                                    collaborators: explicitCollaborators,
+                                });
+                            } catch (err) {
+                                return buildToolResult({
+                                    ok: false,
+                                    partial: true,
+                                    action: "create",
+                                    accountId: account.accountId,
+                                    resourceType: result.docTypeLabel,
+                                    canonicalDocId: result.docId,
+                                    docId: result.docId,
+                                    title: readString(params.docName),
+                                    url: result.url || undefined,
+                                    summary: `已创建${mapDocTypeLabel(result.docType)}"${readString(params.docName)}"（docId: ${result.docId}），但权限授予失败`,
+                                    usageHint: buildDocIdUsageHint(result.docId) || undefined,
+                                    error: err instanceof Error ? err.message : String(err),
+                                    raw: { create: result.raw },
+                                });
+                            }
+                        }
+                        return buildToolResult({
+                            ok: true,
+                            action: "create",
+                            accountId: account.accountId,
+                            resourceType: result.docTypeLabel,
+                            canonicalDocId: result.docId,
+                            docId: result.docId,
+                            title: readString(params.docName),
+                            url: result.url || undefined,
+                            summary: accessResult
+                                ? `已创建${mapDocTypeLabel(result.docType)}"${readString(params.docName)}"（docId: ${result.docId}）；${summarizeDocAccess(accessResult)}` + (contentResult ? `；内容填充: ${contentResult}` : "")
+                                : `已创建${mapDocTypeLabel(result.docType)}"${readString(params.docName)}"（docId: ${result.docId}）` + (contentResult ? `；内容填充: ${contentResult}` : ""),
+                            usageHint: buildDocIdUsageHint(result.docId) || undefined,
+                            raw: accessResult ? { create: result.raw, access: accessResult.raw } : result.raw,
+                        });
+                    }
+                    case "rename": {
+                        const result = await docClient.renameDoc({
+                            agent: account,
+                            docId: params.docId,
+                            newName: params.newName,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "rename",
+                            accountId: account.accountId,
+                            docId: result.docId,
+                            title: result.newName,
+                            summary: `文档已重命名为"${result.newName}"`,
+                            raw: result.raw,
+                        });
+                    }
+                    case "copy": {
+                        const result = await docClient.copyDoc({
+                            agent: account,
+                            docId: params.docId,
+                            newName: params.newName,
+                            spaceId: params.spaceId,
+                            fatherId: params.fatherId,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "copy",
+                            accountId: account.accountId,
+                            docId: result.docId,
+                            summary: `文档已成功复制，新 docId: ${result.docId}`,
+                            raw: result.raw,
+                        });
+                    }
+                    case "get_info": {
+                        const result = await docClient.getDocBaseInfo({
+                            agent: account,
+                            docId: params.docId,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "get_info",
+                            accountId: account.accountId,
+                            docId: params.docId,
+                            title: readString(result.info?.doc_name) || undefined,
+                            resourceType:
+                                Number(result.info?.doc_type) === 10 ? "smart_table" : Number(result.info?.doc_type) === 4 ? "spreadsheet" : "doc",
+                            summary: summarizeDocInfo(result.info),
+                            raw: result.raw,
+                        });
+                    }
+                    case "share": {
+                        const result = await docClient.shareDoc({
+                            agent: account,
+                            docId: params.docId,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "share",
+                            accountId: account.accountId,
+                            canonicalDocId: params.docId,
+                            docId: params.docId,
+                            url: result.shareUrl || undefined,
+                            summary: result.shareUrl ? `文档分享链接已获取（docId: ${params.docId}）` : `文档分享接口调用成功（docId: ${params.docId}）`,
+                            usageHint: buildDocIdUsageHint(params.docId) || undefined,
+                            raw: result.raw,
+                        });
+                    }
+                    case "get_auth": {
+                        const result = await docClient.getDocAuth({
+                            agent: account,
+                            docId: params.docId,
+                        });
+                        const diagnosis = buildDocAuthDiagnosis(result, toolContext?.senderId);
+                        return buildToolResult({
+                            ok: true,
+                            action: "get_auth",
+                            accountId: account.accountId,
+                            canonicalDocId: params.docId,
+                            docId: params.docId,
+                            summary: summarizeDocAuth(result),
+                            diagnosis,
+                            raw: result.raw,
+                        });
+                    }
+                    case "diagnose_auth": {
+                        const result = await docClient.getDocAuth({
+                            agent: account,
+                            docId: params.docId,
+                        });
+                        const diagnosis = buildDocAuthDiagnosis(result, toolContext?.senderId);
+                        return buildToolResult({
+                            ok: true,
+                            action: "diagnose_auth",
+                            accountId: account.accountId,
+                            canonicalDocId: params.docId,
+                            docId: params.docId,
+                            summary: summarizeDocAuthDiagnosis(diagnosis),
+                            diagnosis,
+                            raw: result.raw,
+                        });
+                    }
+                    case "validate_share_link": {
+                        const result = await inspectWecomShareLink({
+                            shareUrl: params.shareUrl,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "validate_share_link",
+                            accountId: account.accountId,
+                            url: result.diagnosis.finalUrl || params.shareUrl,
+                            summary: summarizeShareLinkDiagnosis(result.diagnosis),
+                            diagnosis: result.diagnosis,
+                            raw: result.raw,
+                        });
+                    }
+                    case "delete": {
+                        const result = await docClient.deleteDoc({
+                            agent: account,
+                            docId: params.docId,
+                            formId: params.formId,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "delete",
+                            accountId: account.accountId,
+                            docId: result.docId || undefined,
+                            formId: result.formId || undefined,
+                            summary: result.formId ? "收集表已删除" : "文档已删除",
+                            raw: result.raw,
+                        });
+                    }
+                    case "set_join_rule": {
+                        const result = await docClient.setDocJoinRule({
+                            agent: account,
+                            docId: params.docId,
+                            request: params.request,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "set_join_rule",
+                            accountId: account.accountId,
+                            docId: result.docId,
+                            summary: "文档查看规则已更新",
+                            raw: result.raw,
+                        });
+                    }
+                    case "set_member_auth": {
+                        const result = await docClient.setDocMemberAuth({
+                            agent: account,
+                            docId: params.docId,
+                            request: params.request,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "set_member_auth",
+                            accountId: account.accountId,
+                            docId: result.docId,
+                            summary: "文档通知范围及成员权限已更新",
+                            raw: result.raw,
+                        });
+                    }
+                    case "grant_access": {
+                        const result = await docClient.grantDocAccess({
+                            agent: account,
+                            docId: params.docId,
+                            viewers: params.viewers,
+                            collaborators: params.collaborators,
+                            removeViewers: params.removeViewers,
+                            removeCollaborators: params.removeCollaborators,
+                            authLevel: params.auth,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "grant_access",
+                            accountId: account.accountId,
+                            docId: result.docId,
+                            summary: summarizeDocAccess(result),
+                            raw: result.raw,
+                        });
+                    }
+                    case "add_collaborators": {
+                        const result = await docClient.addDocCollaborators({
+                            agent: account,
+                            docId: params.docId,
+                            collaborators: params.collaborators,
+                            auth: params.auth,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "add_collaborators",
+                            accountId: account.accountId,
+                            docId: result.docId,
+                            summary: `协作者已添加：${result.addedCollaboratorCount ?? 0}`,
+                            raw: result.raw,
+                        });
+                    }
+                    case "get_content": {
+                        const result = await docClient.getDocContent({
+                            agent: account,
+                            docId: params.docId,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "get_content",
+                            accountId: account.accountId,
+                            docId: params.docId,
+                            summary: "文档内容已获取",
+                            raw: result.raw,
+                        });
+                    }
+                    case "update_content": {
+                        const result = await docClient.updateDocContent({
+                            agent: account,
+                            docId: params.docId,
+                            requests: params.requests,
+                            version: params.version,
+                        });
+                        
+                        const batchCount = result.batches ?? 1;
+                        return buildToolResult({
+                            ok: true,
+                            action: "update_content",
+                            accountId: account.accountId,
+                            docId: params.docId,
+                            summary: batchCount > 1 
+                                ? `文档内容已更新（自动分批，共${batchCount}批）` 
+                                : "文档内容已更新",
+                            batches: batchCount,
+                            raw: result.raw,
+                        });
+                    }
+                    case "set_safety_setting": {
+                        const result = await docClient.setDocSafetySetting({
+                            agent: account,
+                            docId: params.docId,
+                            request: params.request,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "set_safety_setting",
+                            accountId: account.accountId,
+                            docId: result.docId,
+                            summary: "文档安全设置已更新",
+                            raw: result.raw,
+                        });
+                    }
+                    case "get_doc_security_setting": {
+                        const result = await docClient.getDocAuth({
+                            agent: account,
+                            docId: params.docId,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "get_doc_security_setting",
+                            accountId: account.accountId,
+                            docId: params.docId,
+                            summary: "文档安全设置已获取",
+                            details: result.secureSetting,
+                            raw: result.raw,
+                        });
+                    }
+                    case "mod_doc_security_setting": {
+                        // Alias to setDocSafetySetting logic
+                        const result = await docClient.setDocSafetySetting({
+                            agent: account,
+                            docId: params.docId,
+                            request: params.setting,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "mod_doc_security_setting",
+                            accountId: account.accountId,
+                            docId: result.docId,
+                            summary: "文档安全设置已更新",
+                            raw: result.raw,
+                        });
+                    }
+                    case "mod_doc_member_notified_scope": {
+                        const result = await docClient.modDocMemberNotifiedScope({
+                            agent: account,
+                            docId: params.docId,
+                            notified_scope_type: params.notified_scope_type,
+                            notified_member_list: params.notified_member_list,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "mod_doc_member_notified_scope",
+                            accountId: account.accountId,
+                            docId: params.docId,
+                            summary: "文档成员通知范围已更新",
+                            raw: result,
+                        });
+                    }
+                    case "create_form": {
+                        // 创建收集表（表单）
+                        try {
+                            const result = await docClient.createCollect({
+                                agent: account,
+                                formInfo: params.formInfo,
+                                spaceId: params.spaceId,
+                                fatherId: params.fatherId,
+                            });
+                            const title = readString(result.title);
+                            return buildToolResult({
+                                ok: true,
+                                action: "create_form",
+                                accountId: account.accountId,
+                                formId: result.formId,
+                                title: title || undefined,
+                                summary: title ? `已创建收集表"${title}"（formId: ${result.formId}）` : `已创建收集表（formId: ${result.formId}）`,
+                                raw: result.raw,
+                            });
+                        } catch (err) {
+                            const errorMsg = err instanceof Error ? err.message : String(err);
+                            return buildToolResult({
+                                ok: false,
+                                action: "create_form",
+                                accountId: account.accountId,
+                                error: errorMsg,
+                                summary: "创建收集表失败",
+                                raw: {},
+                            });
+                        }
+                    }
+                    case "modify_form": {
+                        const result = await docClient.modifyCollect({
+                            agent: account,
+                            oper: params.oper,
+                            formId: params.formId,
+                            formInfo: params.formInfo,
+                        });
+                        const title = readString(result.title);
+                        return buildToolResult({
+                            ok: true,
+                            action: "modify_form",
+                            accountId: account.accountId,
+                            formId: result.formId,
+                            title: title || undefined,
+                            summary: title
+                                ? `收集表已更新（${result.oper}）："${title}"`
+                                : `收集表已更新（${result.oper}）`,
+                            raw: result.raw,
+                        });
+                    }
+                    case "get_form_info": {
+                        const result = await docClient.getFormInfo({
+                            agent: account,
+                            formId: params.formId,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "get_form_info",
+                            accountId: account.accountId,
+                            formId: params.formId,
+                            title: readString(result.formInfo?.form_title) || undefined,
+                            summary: summarizeFormInfo(result),
+                            raw: result.raw,
+                        });
+                    }
+                    case "get_form_answer": {
+                        const result = await docClient.getFormAnswer({
+                            agent: account,
+                            repeatedId: params.repeatedId,
+                            answerIds: params.answerIds,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "get_form_answer",
+                            accountId: account.accountId,
+                            repeatedId: params.repeatedId,
+                            summary: summarizeFormAnswer(result),
+                            raw: result.raw,
+                        });
+                    }
+                    case "get_form_statistic": {
+                        const result = await docClient.getFormStatistic({
+                            agent: account,
+                            requests: params.requests,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "get_form_statistic",
+                            accountId: account.accountId,
+                            summary: summarizeFormStatistic(result),
+                            raw: result.raw,
+                        });
+                    }
+                    case "get_sheet_properties": {
+                        const result = await docClient.getSheetProperties({
+                            agent: account,
+                            docId: params.docId,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "get_sheet_properties",
+                            accountId: account.accountId,
+                            docId: params.docId,
+                            summary: summarizeSheetProperties(result),
+                            raw: result.raw,
+                        });
+                    }
+                    case "edit_sheet_data": {
+                        const result = await docClient.editSheetData({
+                            agent: account,
+                            docId: params.docId,
+                            sheetId: params.sheetId,
+                            startRow: params.startRow ?? 0,
+                            startColumn: params.startColumn ?? 0,
+                            gridData: params.gridData,
+                            requests: params.requests,  // Support direct requests for multiple operations
+                        });
+                        const summary = result.operations 
+                            ? `在线表格已更新（${result.operations}个操作）`
+                            : "在线表格数据已编辑";
+                        return buildToolResult({
+                            ok: true,
+                            action: "edit_sheet_data",
+                            accountId: account.accountId,
+                            docId: result.docId,
+                            summary: summary,
+                            operations: result.operations,
+                            updatedCells: result.updatedCells,
+                            raw: result.raw,
+                        });
+                    }
+                    case "get_sheet_data": {
+                        const result = await docClient.getSheetData({
+                            agent: account,
+                            docId: params.docId,
+                            sheetId: params.sheetId,
+                            range: params.range,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "get_sheet_data",
+                            accountId: account.accountId,
+                            docId: params.docId,
+                            summary: "在线表格数据已读取",
+                            data: result.data,
+                            raw: result.raw,
+                        });
+                    }
+                    case "modify_sheet_properties": {
+                        const result = await docClient.modifySheetProperties({
+                            agent: account,
+                            docId: params.docId,
+                            requests: params.requests,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "modify_sheet_properties",
+                            accountId: account.accountId,
+                            docId: result.docId,
+                            summary: "在线表格属性已修改",
+                            raw: result.raw,
+                        });
+                    }
+                    case "smartsheet_add_records": {
+                        const result = await docClient.smartTableOperate({
+                            agent: account,
+                            docId: params.docId,
+                            operation: "add_records",
+                            bodyData: params,
+                        });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: "智能表格记录已添加", raw: result.raw });
+                    }
+                    case "smartsheet_update_records": {
+                        const result = await docClient.smartTableOperate({
+                            agent: account,
+                            docId: params.docId,
+                            operation: "update_records",
+                            bodyData: params,
+                        });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: "智能表格记录已更新", raw: result.raw });
+                    }
+                    case "smartsheet_del_records": {
+                        const result = await docClient.smartTableOperate({
+                            agent: account,
+                            docId: params.docId,
+                            operation: "del_records",
+                            bodyData: params,
+                        });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: "智能表格记录已删除", raw: result.raw });
+                    }
+                    case "smartsheet_get_records": {
+                        const result = await docClient.smartTableGetRecords({ agent: account, ...params });
+                        return buildToolResult({ 
+                            ok: true, 
+                            action, 
+                            accountId: account.accountId, 
+                            docId: params.docId, 
+                            summary: result.records?.length ? `智能表格记录已获取：${result.records.length} 条` : "智能表格记录列表已获取",
+                            total: result.total,
+                            has_more: result.has_more,
+                            ver: result.ver,
+                            raw: result.raw,
+                        });
+                    }
+                    case "smartsheet_get_views": {
+                        const result = await docClient.smartTableGetViews({ agent: account, ...params });
+                        return buildToolResult({ 
+                            ok: true, 
+                            action, 
+                            accountId: account.accountId, 
+                            docId: params.docId, 
+                            summary: result.views?.length ? `智能表格视图已获取：${result.views.length} 个` : "智能表格视图列表已获取",
+                            total: result.total,
+                            has_more: result.has_more,
+                            raw: result.raw,
+                        });
+                    }
+                    case "smartsheet_get_sheets": {
+                        const result = await docClient.smartTableGetSheets({
+                            agent: account,
+                            docId: params.docId,
+                            sheet_id: params.sheet_id,
+                            need_all_type_sheet: params.need_all_type_sheet,
+                        });
+                        return buildToolResult({
+                            ok: true,
+                            action: "smartsheet_get_sheets",
+                            accountId: account.accountId,
+                            docId: params.docId,
+                            summary: `智能表格子表列表已获取：${result.sheets.length} 个`,
+                            raw: result.raw,
+                        });
+                    }
+                    case "smartsheet_add_sheet": {
+                        const result = await docClient.smartTableAddSheet({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: "智能表格子表已添加", raw: result.raw });
+                    }
+                    case "smartsheet_del_sheet": {
+                        const result = await docClient.smartTableDelSheet({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: "智能表格子表已删除", raw: result.raw });
+                    }
+                    case "smartsheet_update_sheet": {
+                        const result = await docClient.smartTableUpdateSheet({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: "智能表格子表已更新", raw: result.raw });
+                    }
+                    case "smartsheet_add_view": {
+                        const result = await docClient.smartTableAddView({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: `智能表格视图已添加：${result.view?.view_title || "未知"}`, raw: result.raw });
+                    }
+                    case "smartsheet_del_view": {
+                        const result = await docClient.smartTableDelView({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: `智能表格视图已删除：${params.view_ids?.length || 0} 个`, raw: result.raw });
+                    }
+                    case "smartsheet_update_view": {
+                        const result = await docClient.smartTableUpdateView({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: `智能表格视图已更新：${result.view?.view_title || "未知"}`, raw: result.raw });
+                    }
+                    case "smartsheet_add_fields": {
+                        const result = await docClient.smartTableAddFields({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: `智能表格字段已添加：${result.fields?.length || 0} 个`, raw: result.raw });
+                    }
+                    case "smartsheet_del_fields": {
+                        const result = await docClient.smartTableDelFields({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: `智能表格字段已删除：${params.field_ids?.length || 0} 个`, raw: result.raw });
+                    }
+                    case "smartsheet_update_fields": {
+                        const result = await docClient.smartTableUpdateFields({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: `智能表格字段已更新：${result.fields?.length || 0} 个`, raw: result.raw });
+                    }
+                    case "smartsheet_get_fields": {
+                        const result = await docClient.smartTableGetFields({ agent: account, ...params });
+                        return buildToolResult({ 
+                            ok: true, 
+                            action, 
+                            accountId: account.accountId, 
+                            docId: params.docId, 
+                            summary: result.fields?.length ? `智能表格字段已获取：${result.fields.length} 个` : "智能表格字段列表已获取",
+                            total: result.total,
+                            has_more: result.has_more,
+                            raw: result.raw,
+                        });
+                    }
+                    case "smartsheet_add_group": {
+                        const result = await docClient.smartTableAddGroup({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: "智能表格编组已添加", raw: result.raw });
+                    }
+                    case "smartsheet_del_group": {
+                        const result = await docClient.smartTableDelGroup({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: "智能表格编组已删除", raw: result.raw });
+                    }
+                    case "smartsheet_update_group": {
+                        const result = await docClient.smartTableUpdateGroup({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: "智能表格编组已更新", raw: result.raw });
+                    }
+                    case "smartsheet_get_groups": {
+                        const result = await docClient.smartTableGetGroups({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: "智能表格编组列表已获取", raw: result.raw });
+                    }
+                    case "smartsheet_add_external_records": {
+                        const result = await docClient.smartTableAddExternalRecords({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: "智能表格外部记录已添加", raw: result.raw });
+                    }
+                    case "smartsheet_update_external_records": {
+                        const result = await docClient.smartTableUpdateExternalRecords({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: "智能表格外部记录已更新", raw: result.raw });
+                    }
+                    case "smartsheet_get_sheet_priv": {
+                        const result = await docClient.smartTableGetSheetPriv({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: "智能表格子表权限已获取", raw: result.raw });
+                    }
+                    case "smartsheet_update_sheet_priv": {
+                        const result = await docClient.smartTableUpdateSheetPriv({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: "智能表格子表权限已更新", raw: result.raw });
+                    }
+                    case "smartsheet_create_rule": {
+                        const result = await docClient.smartTableCreateRule({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: `智能表格成员额外权限规则已创建 (rule_id: ${result.rule_id})`, raw: result.raw });
+                    }
+                    case "smartsheet_mod_rule_member": {
+                        const result = await docClient.smartTableModRuleMember({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: "智能表格成员额外权限成员已更新", raw: result.raw });
+                    }
+                    case "smartsheet_delete_rule": {
+                        const result = await docClient.smartTableDeleteRule({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, docId: params.docId, summary: "智能表格成员额外权限规则已删除", raw: result.raw });
+                    }
+                    case "doc_assign_advanced_account": {
+                        const result = await docClient.assignDocAdvancedAccount({ agent: account, userid_list: params.userid_list });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, summary: summarizeAdvancedAccount(result.raw, "assign"), raw: result.raw });
+                    }
+                    case "doc_cancel_advanced_account": {
+                        const result = await docClient.cancelDocAdvancedAccount({ agent: account, userid_list: params.userid_list });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, summary: summarizeAdvancedAccount(result.raw, "cancel"), raw: result.raw });
+                    }
+                    case "doc_get_advanced_account_list": {
+                        const result = await docClient.getDocAdvancedAccountList({ agent: account, ...params });
+                        return buildToolResult({ ok: true, action, accountId: account.accountId, summary: summarizeAdvancedAccount(result, "list"), raw: result.raw });
+                    }
+                    case "upload_doc_image": {
+                        const filePath = params.file_path;
+                        if (!fs.existsSync(filePath)) {
+                            throw new Error(`File not found: ${filePath}`);
+                        }
+                        const fileContent = fs.readFileSync(filePath);
+                        const base64Content = fileContent.toString("base64");
 
             const result = await docClient.uploadDocImage({
               agent: account,

@@ -8,6 +8,7 @@ import { handleWecomWebhookRequest } from "./src/monitor.js";
 import { setWecomRuntime } from "./src/runtime.js";
 import { wecomPlugin } from "./src/channel.js";
 import { registerWecomDocTools } from "./src/capability/doc/tool.js";
+import { registerWecomCalendarTools } from "./src/capability/calendar/tool.js";
 
 const plugin = {
   id: "wecom",
@@ -37,6 +38,7 @@ const plugin = {
 
     // Register WeCom Doc Tools
     registerWecomDocTools(api);
+    registerWecomCalendarTools(api);
   },
 };
 
