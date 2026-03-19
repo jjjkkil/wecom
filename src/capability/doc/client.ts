@@ -1487,13 +1487,21 @@ export class WecomDocClient {
             const fieldsResult = await this.smartTableGetFields({ agent, docId, sheetId, limit: 100 });
             const allFields = fieldsResult.fields || [];
             
-            // If we only have 1 field and it's likely the leftover default, delete it
-            // (User has added new fields, so we can remove the old default)
-            if (allFields.length === 1 && newlyAddedFieldCount > 0) {
-                const leftoverField = allFields[0] as any;
-                // Check if it's a default field type (TEXT, NUMBER, DATE_TIME, SINGLE_SELECT, USER)
+            // After adding N new fields to a table with 1 default field, we should have N+1 fields
+            // If total = newlyAdded + 1, then there's 1 leftover default field to delete
+            if (allFields.length === newlyAddedFieldCount + 1 && newlyAddedFieldCount > 0) {
+                // Find the field that looks like a leftover default
+                // Default fields typically have generic titles like "文本", "数字", "日期", "单选", "人员"
+                const defaultFieldTitles = ['文本', '数字', '日期', '单选', '人员', '文本 1', '数字 1', '日期 1', '单选 1', '人员 1'];
                 const defaultFieldTypes = ['FIELD_TYPE_TEXT', 'FIELD_TYPE_NUMBER', 'FIELD_TYPE_DATE_TIME', 'FIELD_TYPE_SINGLE_SELECT', 'FIELD_TYPE_USER'];
-                if (defaultFieldTypes.includes(leftoverField.field_type)) {
+                
+                const leftoverField = allFields.find((field: any) => {
+                    const isDefaultTitle = defaultFieldTitles.includes(field.field_title);
+                    const isDefaultType = defaultFieldTypes.includes(field.field_type);
+                    return isDefaultTitle && isDefaultType;
+                }) as any;
+                
+                if (leftoverField && leftoverField.field_id) {
                     await this.smartTableDelFields({ agent, docId, sheetId, field_ids: [leftoverField.field_id] });
                 }
             }
