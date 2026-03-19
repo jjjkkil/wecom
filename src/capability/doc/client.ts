@@ -1653,47 +1653,55 @@ export class WecomDocClient {
             throw new Error("records 必须是非空数组");
         }
         
-        // Validate and normalize each record's values format
-        // Per actual API behavior: 
-        // - TEXT, USER, SELECT, etc. need array format: [{type:"text", text:"..."}] or [{user_id:"..."}]
-        // - NUMBER, DATE_TIME, PROGRESS, etc. can be direct value: 25 or "1704067200000"
-        const normalizedRecords = records.map((record: any, recordIndex: number) => {
-            if (!record.values || typeof record.values !== 'object') {
-                throw new Error(`第${recordIndex + 1}条记录缺少 values 对象`);
+        // Strict validation: require correct format based on field type
+        // Do NOT auto-convert ambiguous values to avoid corrupting user intent
+        const validatedRecords = records.map((record: any, recordIndex: number) => {
+            if (!record.values || typeof record.values !== 'object' || Array.isArray(record.values)) {
+                throw new Error(`第${recordIndex + 1}条记录：values 必须是非空对象`);
             }
             
-            const normalizedValues: Record<string, any> = {};
+            const validatedValues: Record<string, any> = {};
             for (const [key, value] of Object.entries(record.values)) {
-                // Normalize value to array format if it's a primitive or plain object
-                // Array values are kept as-is (for multi-select, multi-user, etc.)
-                if (!Array.isArray(value)) {
-                    // Primitive values (number, string) - wrap in array for consistency
-                    // But for NUMBER, DATE_TIME, PROGRESS, PERCENTAGE - keep as direct value
-                    if (typeof value === 'number' || (typeof value === 'string' && /^\d{13}$/.test(value))) {
-                        // Number or timestamp string - keep as direct value
-                        normalizedValues[key] = value;
-                    } else if (typeof value === 'object' && value !== null) {
-                        // Object like {user_id: "..."} - wrap in array
-                        normalizedValues[key] = [value];
-                    } else {
-                        // String text - wrap as text object in array
-                        normalizedValues[key] = [{ type: 'text', text: String(value) }];
+                // Accept both array and non-array formats based on field type
+                // Array types: TEXT, USER, SELECT, SINGLE_SELECT, CHECKBOX, PHONE_NUMBER, EMAIL, URL, LOCATION, BARCODE, ATTACHMENT, IMAGE
+                // Non-array types: NUMBER, DATE_TIME, PROGRESS, CURRENCY, PERCENTAGE
+                
+                if (Array.isArray(value)) {
+                    // Array format - validate structure
+                    if (value.length === 0) {
+                        throw new Error(`第${recordIndex + 1}条记录字段 "${key}": 数组不能为空`);
                     }
+                    validatedValues[key] = value;
+                } else if (typeof value === 'number') {
+                    // Non-array number - valid for NUMBER, PROGRESS, CURRENCY, PERCENTAGE
+                    validatedValues[key] = value;
+                } else if (typeof value === 'string' && /^\d{13}$/.test(value)) {
+                    // Non-array 13-digit string - valid for DATE_TIME (millisecond timestamp)
+                    validatedValues[key] = value;
+                } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+                    // Object format - wrap in array for types like USER, TEXT object
+                    // This allows {user_id: "..."} to become [{user_id: "..."}]
+                    validatedValues[key] = [value];
                 } else {
-                    // Already an array - keep as-is
-                    normalizedValues[key] = value;
+                    // Reject ambiguous primitives (plain strings, booleans)
+                    // Users should explicitly use array format: [{type: "text", text: "..."}]
+                    throw new Error(
+                        `第${recordIndex + 1}条记录字段 "${key}": 值格式不明确。` +
+                        `数字/日期类型直接写值 (25, "1704067200000")，` +
+                        `文本/成员/选项类型用数组 ([{"type": "text", "text": "..."}], [{"user_id": "..."}])`
+                    );
                 }
             }
             
             return {
                 ...record,
-                values: normalizedValues,
+                values: validatedValues,
             };
         });
         
         const bodyData: Record<string, unknown> = {
             sheet_id: readString(sheetId),
-            records: normalizedRecords,
+            records: validatedRecords,
         };
         
         if (key_type) {
@@ -1706,41 +1714,48 @@ export class WecomDocClient {
     async smartTableUpdateRecords(params: { agent: ResolvedAgentAccount; docId: string; sheetId: string; records: any[] }) {
         const { agent, docId, sheetId, records } = params;
         
-        // Validate and normalize records format (same as addRecords)
+        // Strict validation: same as addRecords
         if (!Array.isArray(records) || records.length === 0) {
             throw new Error("records 必须是非空数组");
         }
         
-        const normalizedRecords = records.map((record: any, recordIndex: number) => {
+        const validatedRecords = records.map((record: any, recordIndex: number) => {
             if (!record.record_id) {
                 throw new Error(`第${recordIndex + 1}条记录缺少 record_id`);
             }
-            if (!record.values || typeof record.values !== 'object') {
-                throw new Error(`第${recordIndex + 1}条记录缺少 values 对象`);
+            if (!record.values || typeof record.values !== 'object' || Array.isArray(record.values)) {
+                throw new Error(`第${recordIndex + 1}条记录：values 必须是非空对象`);
             }
             
-            const normalizedValues: Record<string, any> = {};
+            const validatedValues: Record<string, any> = {};
             for (const [key, value] of Object.entries(record.values)) {
-                if (!Array.isArray(value)) {
-                    if (typeof value === 'number' || (typeof value === 'string' && /^\d{13}$/.test(value))) {
-                        normalizedValues[key] = value;
-                    } else if (typeof value === 'object' && value !== null) {
-                        normalizedValues[key] = [value];
-                    } else {
-                        normalizedValues[key] = [{ type: 'text', text: String(value) }];
+                if (Array.isArray(value)) {
+                    if (value.length === 0) {
+                        throw new Error(`第${recordIndex + 1}条记录字段 "${key}": 数组不能为空`);
                     }
+                    validatedValues[key] = value;
+                } else if (typeof value === 'number') {
+                    validatedValues[key] = value;
+                } else if (typeof value === 'string' && /^\d{13}$/.test(value)) {
+                    validatedValues[key] = value;
+                } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+                    validatedValues[key] = [value];
                 } else {
-                    normalizedValues[key] = value;
+                    throw new Error(
+                        `第${recordIndex + 1}条记录字段 "${key}": 值格式不明确。` +
+                        `数字/日期类型直接写值 (25, "1704067200000")，` +
+                        `文本/成员/选项类型用数组 ([{"type": "text", "text": "..."}], [{"user_id": "..."}])`
+                    );
                 }
             }
             
             return {
                 ...record,
-                values: normalizedValues,
+                values: validatedValues,
             };
         });
         
-        return this.smartTableOperate({ agent, docId, operation: "update_records", bodyData: { sheet_id: sheetId, records: normalizedRecords } });
+        return this.smartTableOperate({ agent, docId, operation: "update_records", bodyData: { sheet_id: sheetId, records: validatedRecords } });
     }
 
     async smartTableDelRecords(params: { agent: ResolvedAgentAccount; docId: string; sheetId: string; record_ids: string[] }) {
