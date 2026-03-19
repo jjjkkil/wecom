@@ -9,6 +9,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk";
 import { resolveWecomMediaMaxBytes, resolveWecomMergedMediaLocalRoots } from "../../config/index.js";
 import { getWecomRuntime } from "../../runtime.js";
 import type { ReplyHandle, ReplyPayload } from "../../types/index.js";
+import { toWeComMarkdownV2 } from "../../wecom_msg_adapter/markdown_adapter.js";
 import { uploadAndSendBotWsMedia } from "./media.js";
 
 const PLACEHOLDER_KEEPALIVE_MS = 3000;
@@ -307,13 +308,13 @@ export function createBotWsReplyHandle(params: {
           // Send push message for other events
           await params.client.sendMessage(peerId, {
             msgtype: "markdown",
-            markdown: { content: finalText },
+            markdown: { content: toWeComMarkdownV2(finalText) },
           });
         } else {
           await params.client.replyStream(
             params.frame,
             resolveStreamId(),
-            finalText,
+            toWeComMarkdownV2(finalText),
             info.kind === "final",
           );
         }

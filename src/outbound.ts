@@ -1,5 +1,6 @@
 import type { ChannelOutboundAdapter, ChannelOutboundContext } from "openclaw/plugin-sdk";
 import { WecomAgentDeliveryService } from "./capability/agent/index.js";
+import { toWeComMarkdownV2 } from "./wecom_msg_adapter/markdown_adapter.js";
 import {
   resolveWecomMergedMediaLocalRoots,
   resolveWecomMediaMaxBytes,
@@ -135,10 +136,11 @@ async function sendTextViaBotWs(params: {
       `WeCom outbound account=${accountId} is configured for Bot WS active push, but the WS transport is not connected.`,
     );
   }
+  const markdownText = toWeComMarkdownV2(params.text);
   console.log(
-    `[wecom-outbound] Sending Bot WS active message to target=${String(params.to ?? "")} chatId=${chatId} (len=${params.text.length})`,
+    `[wecom-outbound] Sending Bot WS active message to target=${String(params.to ?? "")} chatId=${chatId} (len=${markdownText.length})`,
   );
-  await handle.sendMarkdown(chatId, params.text);
+  await handle.sendMarkdown(chatId, markdownText);
   console.log(`[wecom-outbound] Successfully sent Bot WS active message to ${chatId}`);
   return true;
 }
