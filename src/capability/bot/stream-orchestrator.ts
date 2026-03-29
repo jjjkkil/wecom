@@ -16,6 +16,7 @@ import { buildWecomBotDispatchConfig } from "./dispatch-config.js";
 import { sendBotFallbackPromptNow } from "./fallback-delivery.js";
 import { finalizeBotStream } from "./stream-finalizer.js";
 import { handleDirectLocalPathIntent } from "./local-path-delivery.js";
+import { stageWecomInboundMediaForSession } from "./sandbox-media.js";
 import { createBotReplyDispatcher } from "./stream-delivery.js";
 import type { BotRuntimeLogger, RecordBotOperationalEvent } from "./types.js";
 
@@ -152,6 +153,7 @@ export function createBotStreamOrchestrator(params: {
 
     let mediaPath: string | undefined;
     let mediaType: string | undefined;
+    const mediaFilename = media?.filename;
     if (media) {
       try {
         const maxBytes = resolveWecomMediaMaxBytes(target.config, target.account.accountId);
@@ -203,6 +205,23 @@ export function createBotStreamOrchestrator(params: {
       route.sessionKey = `agent:${targetAgentId}:wecom:${account.accountId}:${chatType === "group" ? "group" : "dm"}:${chatId}`;
       ensureDynamicAgentListed(targetAgentId, core).catch(() => { });
       logVerbose(target, `dynamic agent routing: ${targetAgentId}, sessionKey=${route.sessionKey}`);
+    }
+
+    if (mediaPath) {
+      try {
+        const stagedSessionPath = await stageWecomInboundMediaForSession({
+          cfg: target.config,
+          accountId: target.account.accountId,
+          agentId: route.agentId,
+          sessionKey: route.sessionKey,
+          mediaPath,
+          filename: mediaFilename,
+        });
+        mediaPath = stagedSessionPath;
+        logVerbose(target, `session media staged to ${mediaPath}`);
+      } catch (err) {
+        target.runtime.error?.(`Failed to stage inbound media for session workspace: ${String(err)}`);
+      }
     }
 
     logVerbose(target, `starting agent processing (streamId=${streamId}, agentId=${route.agentId}, peerKind=${chatType}, peerId=${chatId})`);
