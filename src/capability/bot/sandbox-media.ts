@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { constants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { copyFile, mkdir, stat } from "node:fs/promises";
@@ -12,6 +13,14 @@ function expandHomeDir(input: string): string {
   if (input === "~") return os.homedir();
   if (input.startsWith("~/")) return path.join(os.homedir(), input.slice(2));
   return input;
+}
+
+function resolveOpenClawStateDir(): string {
+  const override = process.env.OPENCLAW_STATE_DIR?.trim() || process.env.CLAWDBOT_STATE_DIR?.trim();
+  if (override) {
+    return path.resolve(expandHomeDir(override));
+  }
+  return path.join(os.homedir(), ".openclaw");
 }
 
 function normalizeAgentId(agentId: string): string {
@@ -71,8 +80,14 @@ function resolveSessionWorkspaceTarget(params: {
     };
   }
   if (sandbox.workspaceAccess === "rw" || !sandbox.workspaceRoot) {
+    if (sandbox.workspaceAccess === "rw") {
+      return {
+        workspaceDir: agentWorkspaceDir,
+        sandboxed: true,
+      };
+    }
     return {
-      workspaceDir: agentWorkspaceDir,
+      workspaceDir: path.join(resolveOpenClawStateDir(), "sandboxes", slugifySessionKey(params.sessionKey.trim() || "main")),
       sandboxed: true,
     };
   }
@@ -96,7 +111,15 @@ function resolveSessionWorkspaceTarget(params: {
   };
 }
 
-async function allocateWorkspaceInboundFile(params: {
+function buildStagedFilenameCandidate(parsed: path.ParsedPath, suffix: number): string {
+  if (suffix === 0) {
+    return parsed.base || "attachment";
+  }
+  return `${parsed.name || "attachment"}-${suffix}${parsed.ext}`;
+}
+
+async function copyIntoWorkspaceInbound(params: {
+  sourcePath: string;
   workspaceDir: string;
   filename: string;
 }): Promise<{ absolutePath: string; relativePath: string }> {
@@ -104,20 +127,20 @@ async function allocateWorkspaceInboundFile(params: {
   await mkdir(inboundDir, { recursive: true });
 
   const parsed = path.parse(params.filename);
-  const baseName = parsed.base || "attachment";
-  let candidate = baseName;
-  let suffix = 1;
-  for (;;) {
+  for (let suffix = 0; ; suffix += 1) {
+    const candidate = buildStagedFilenameCandidate(parsed, suffix);
     const absolutePath = path.join(inboundDir, candidate);
     try {
-      await stat(absolutePath);
-      candidate = `${parsed.name || "attachment"}-${suffix}${parsed.ext}`;
-      suffix += 1;
-    } catch {
+      await copyFile(params.sourcePath, absolutePath, constants.COPYFILE_EXCL);
       return {
         absolutePath,
         relativePath: path.posix.join("media", "inbound", candidate),
       };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "EEXIST") {
+        continue;
+      }
+      throw error;
     }
   }
 }
@@ -144,10 +167,10 @@ export async function stageWecomInboundMediaForSession(params: {
     );
   }
 
-  const staged = await allocateWorkspaceInboundFile({
+  const staged = await copyIntoWorkspaceInbound({
+    sourcePath: params.mediaPath,
     workspaceDir: target.workspaceDir,
     filename: params.filename || path.basename(params.mediaPath),
   });
-  await copyFile(params.mediaPath, staged.absolutePath);
   return target.sandboxed ? staged.relativePath : staged.absolutePath;
 }
