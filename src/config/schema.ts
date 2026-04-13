@@ -75,6 +75,8 @@ export interface NetworkConfig {
 
 export interface RoutingConfig {
   failClosedOnDefaultRoute?: boolean;
+  fanoutMentionsInGroup?: boolean;
+  fanoutDedupeWindowMs?: number;
 }
 
 export interface BotWsConfig {

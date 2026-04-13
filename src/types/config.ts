@@ -76,6 +76,8 @@ export type WecomNetworkConfig = {
 
 export type WecomRoutingConfig = {
   failClosedOnDefaultRoute?: boolean;
+  fanoutMentionsInGroup?: boolean;
+  fanoutDedupeWindowMs?: number;
 };
 
 export type WecomBotWsConfig = {
