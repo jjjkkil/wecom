@@ -6,6 +6,59 @@ export type WecomDmConfig = {
   allowFrom?: Array<string | number>;
 };
 
+export type WecomAgentEventPolicyConfig = {
+  allowedEventTypes?: string[];
+};
+
+export type WecomAgentInboundPolicyConfig = {
+  eventEnabled?: boolean;
+  eventPolicy?: WecomAgentEventPolicyConfig;
+};
+
+export type WecomAgentEventRouteMatchConfig = {
+  eventType?: string;
+  changeType?: string;
+  eventKey?: string;
+  eventKeyPrefix?: string;
+  eventKeyPattern?: string;
+};
+
+export type WecomAgentEventBuiltinHandlerName = "echo";
+
+export type WecomAgentEventRouteHandlerConfig =
+  | {
+      type: "builtin";
+      name?: WecomAgentEventBuiltinHandlerName;
+      chainToAgent?: boolean;
+    }
+  | {
+      type: "node_script" | "python_script";
+      entry: string;
+      timeoutMs?: number;
+      chainToAgent?: boolean;
+    };
+
+export type WecomAgentEventRouteConfig = {
+  id?: string;
+  when?: WecomAgentEventRouteMatchConfig;
+  handler: WecomAgentEventRouteHandlerConfig;
+};
+
+export type WecomAgentEventRoutingConfig = {
+  unmatchedAction?: "ignore" | "forwardToAgent";
+  routes?: WecomAgentEventRouteConfig[];
+};
+
+export type WecomAgentScriptRuntimeConfig = {
+  enabled?: boolean;
+  allowPaths?: string[];
+  maxStdoutBytes?: number;
+  maxStderrBytes?: number;
+  defaultTimeoutMs?: number;
+  pythonCommand?: string;
+  nodeCommand?: string;
+};
+
 export type WecomMediaConfig = {
   tempDir?: string;
   retentionHours?: number;
@@ -74,6 +127,9 @@ export type WecomAgentConfig = {
   encodingAESKey: string;
   welcomeText?: string;
   dm?: WecomDmConfig;
+  inboundPolicy?: WecomAgentInboundPolicyConfig;
+  eventRouting?: WecomAgentEventRoutingConfig;
+  scriptRuntime?: WecomAgentScriptRuntimeConfig;
   /**
    * 上下游企业配置映射
    * key: 配置名称（可自定义）

@@ -132,8 +132,10 @@ export type WecomAgentInboundMessage = {
     // 事件消息
     Event?: string;
     EventKey?: string;
+    ChangeType?: string;
     // 群聊
     ChatId?: string;
+    [key: string]: unknown;
 };
 
 /**

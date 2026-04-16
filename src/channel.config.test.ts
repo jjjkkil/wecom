@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { describe, expect, it } from "vitest";
 
 import { wecomPlugin } from "./channel.js";
+import { resolveWecomAccounts } from "./config/accounts.js";
 
 describe("wecomPlugin config.deleteAccount", () => {
   it("removes only the target matrix account", () => {
@@ -143,5 +144,37 @@ describe("wecomPlugin account conflict guards", () => {
     expect(wecomPlugin.config.unconfiguredReason?.(accountB, cfg)).toContain(
       "Duplicate WeCom agent identity",
     );
+  });
+
+  it("normalizes agent inbound event policy on resolved accounts", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        wecom: {
+          enabled: true,
+          accounts: {
+            default: {
+              enabled: true,
+              agent: {
+                corpId: "corp-1",
+                corpSecret: "secret-a",
+                agentId: 1001,
+                token: "token-a",
+                encodingAESKey: "aes-a",
+                inboundPolicy: {
+                  eventEnabled: true,
+                  eventPolicy: {
+                    allowedEventTypes: [" Click ", "view", "click"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveWecomAccounts(cfg);
+    expect(resolved.accounts.default?.agent?.eventEnabled).toBe(true);
+    expect(resolved.accounts.default?.agent?.allowedEventTypes).toEqual(["click", "view"]);
   });
 });

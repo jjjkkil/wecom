@@ -31,6 +31,41 @@ describe("shouldProcessAgentInboundMessage", () => {
         expect(unknown.reason).toBe("event:some_random_event");
     });
 
+    it("blocks event processing when eventEnabled is false", () => {
+        const disabled = shouldProcessAgentInboundMessage({
+            msgType: "event",
+            eventType: "click",
+            fromUser: "zhangsan",
+            eventEnabled: false,
+        });
+        expect(disabled.shouldProcess).toBe(false);
+        expect(disabled.reason).toBe("event_disabled");
+    });
+
+    it("allows configured custom event types", () => {
+        const custom = shouldProcessAgentInboundMessage({
+            msgType: "event",
+            eventType: "click",
+            fromUser: "zhangsan",
+            eventEnabled: true,
+            allowedEventTypes: ["click"],
+        });
+        expect(custom.shouldProcess).toBe(true);
+        expect(custom.reason).toBe("allowed_event:click");
+    });
+
+    it("normalizes configured event type values before matching", () => {
+        const custom = shouldProcessAgentInboundMessage({
+            msgType: "event",
+            eventType: "view_miniprogram",
+            fromUser: "zhangsan",
+            eventEnabled: true,
+            allowedEventTypes: [" VIEW_MINIPROGRAM "],
+        });
+        expect(custom.shouldProcess).toBe(true);
+        expect(custom.reason).toBe("allowed_event:view_miniprogram");
+    });
+
     it("skips system sender callbacks", () => {
         const systemSender = shouldProcessAgentInboundMessage({
             msgType: "text",
