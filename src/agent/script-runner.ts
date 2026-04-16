@@ -1,5 +1,4 @@
 import path from "node:path";
-import { spawn } from "node:child_process";
 
 import type {
   WecomAgentEventRouteHandlerConfig,
@@ -91,6 +90,8 @@ export async function runAgentEventScript(params: {
     ? runtime.pythonCommand ?? "python3"
     : runtime.nodeCommand ?? "node";
   const startedAt = Date.now();
+
+  const { spawn } = await import("node:child_process");
 
   return await new Promise<{ response: AgentEventScriptResponse; meta: AgentEventScriptExecutionMeta }>((resolve, reject) => {
     const child = spawn(command, [entryPath], {
