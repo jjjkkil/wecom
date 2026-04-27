@@ -6,6 +6,10 @@
 
 - `menu-click-help.js`：Node.js 菜单点击事件示例。
 - `menu-click-help.py`：Python 菜单点击事件示例。
+- `reply-template-card.mjs`：Node.js 被动回复示例，在 5 秒窗口内返回模板卡片更新 XML。
+- `post-template-card.mjs`：Node.js 后处理示例，复用当前事件路由脚本协议。
+- `reply-template-card.py`：Python 被动回复示例，在 5 秒窗口内返回模板卡片更新 XML。
+- `post-template-card.py`：Python 后处理示例，复用当前事件路由脚本协议。
 
 ## 输入协议
 
@@ -64,6 +68,15 @@
 - `route.matchedRuleId`：命中的路由规则 ID。
 - `route.handlerType`：当前执行器类型（`node_script` 或 `python_script`）。
 
+### 被动回复场景补充字段
+
+当脚本作为 `replyHandler` 或 `postReplyHandler` 执行时，还会出现以下字段：
+
+- `phase`：`reply` 或 `post_reply`。
+- `reply.sent`：是否已成功发出被动回复。
+- `reply.fallbackToSuccess`：回包阶段是否已降级为 `success`。
+- `reply.reason`：降级原因，例如 `reply_timeout`。
+
 ## 输出协议
 
 脚本需要向 `stdout` 输出一份 JSON。当前支持的关键字段：
@@ -71,7 +84,7 @@
 - `ok`：可选，布尔值，表示脚本是否成功处理。
 - `action`：可选，当前支持 `none` 或 `reply_text`。
 - `reply.text`：当 `action=reply_text` 时使用，作为回复内容。
-- `chainToAgent`：可选，脚本侧动态决定是否继续进入默认 Agent（AI）流程；最终结果还会与 handler 配置里的 `chainToAgent` 做合并，只要任一方为 `true` 就会继续。
+- `chainToAgent`：可选，脚本侧动态决定是否继续进入默认 Agent（AI）流程；最终结果还会与 `postReplyHandler.chainToAgent` 做合并，只要任一方为 `true` 就会继续。
 - `audit.tags`：可选，审计标签数组。
 - `error`：可选，错误信息。
 
@@ -96,11 +109,22 @@
 }
 ```
 
+### 被动回复 replyHandler 输出示例
+
+```json
+{
+  "ok": true,
+  "responseMode": "passive_reply",
+  "replyMessage": "<xml>...</xml>",
+  "skipPostReplyHandler": false
+}
+```
+
 ### `chainToAgent` 补充说明
 
 - 这里的 `chainToAgent` 只代表脚本返回的动态结果，不是唯一决策来源。
-- 如果路由 handler 中也配置了 `"chainToAgent": true`，那么即使脚本返回 `false`，最终仍会继续进入默认 Agent 流程。
-- 如果要让脚本完全决定是否继续，handler 里不要写 `chainToAgent`。
+- 如果路由 `postReplyHandler` 中也配置了 `"chainToAgent": true`，那么即使脚本返回 `false`，最终仍会继续进入默认 Agent 流程。
+- 如果要让脚本完全决定是否继续，`postReplyHandler` 里不要写 `chainToAgent`。
 
 ### 示例 3：失败回包（可选）
 
@@ -118,6 +142,7 @@
 
 - 输出必须是严格 JSON。
 - 不要在 `stdout` 混入调试日志；调试信息请写到 `stderr`。
-- 非 0 退出码或非法 JSON 会被视为 handler 执行失败。
+- 非 0 退出码或非法 JSON 会被视为脚本执行失败。
 - 脚本路径必须落在 `scriptRuntime.allowPaths` 允许目录内。
 - 脚本应尽量快速返回，避免触发超时（由 `timeoutMs/defaultTimeoutMs` 控制）。
+- `reply-template-card.mjs` 返回的是“加密前的明文 XML”；真正回包时由插件负责加密、签名和包装。

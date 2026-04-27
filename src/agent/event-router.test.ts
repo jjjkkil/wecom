@@ -98,7 +98,7 @@ describe("routeAgentInboundEvent", () => {
             {
               id: "menu-help",
               when: { eventType: "click", eventKey: "MENU_HELP" },
-              handler: { type: "builtin", name: "echo" },
+              postReplyHandler: { enabled: true, type: "builtin", name: "echo" },
             },
           ],
         },
@@ -132,7 +132,7 @@ describe("routeAgentInboundEvent", () => {
             {
               id: "contact-create-user",
               when: { eventType: "change_contact", changeType: "create_user" },
-              handler: { type: "builtin", name: "echo" },
+              postReplyHandler: { enabled: true, type: "builtin", name: "echo" },
             },
           ],
         },
@@ -170,7 +170,7 @@ describe("routeAgentInboundEvent", () => {
             {
               id: "script-click",
               when: { eventType: "click", eventKeyPrefix: "MENU_" },
-              handler: { type: "node_script", entry: fixturePath },
+              postReplyHandler: { enabled: true, type: "node_script", entry: fixturePath },
             },
           ],
         },
@@ -215,7 +215,7 @@ describe("routeAgentInboundEvent", () => {
             {
               id: "script-click-pass",
               when: { eventType: "click", eventKey: "PASS_TO_DEFAULT" },
-              handler: { type: "node_script", entry: fixturePath },
+              postReplyHandler: { enabled: true, type: "node_script", entry: fixturePath },
             },
           ],
         },
@@ -258,7 +258,7 @@ describe("routeAgentInboundEvent", () => {
             {
               id: "script-python-click",
               when: { eventType: "click", eventKey: "MENU_PY" },
-              handler: { type: "python_script", entry: fixturePath },
+              postReplyHandler: { enabled: true, type: "python_script", entry: fixturePath },
             },
           ],
         },
@@ -301,7 +301,7 @@ describe("routeAgentInboundEvent", () => {
             {
               id: "script-audit-success",
               when: { eventType: "click", eventKey: "MENU_AUDIT" },
-              handler: { type: "node_script", entry: fixturePath },
+              postReplyHandler: { enabled: true, type: "node_script", entry: fixturePath },
             },
           ],
         },
@@ -346,7 +346,7 @@ describe("routeAgentInboundEvent", () => {
             {
               id: "script-invalid-json",
               when: { eventType: "click", eventKey: "MENU_BAD_JSON" },
-              handler: { type: "node_script", entry: fixturePath },
+              postReplyHandler: { enabled: true, type: "node_script", entry: fixturePath },
             },
           ],
         },
@@ -394,7 +394,7 @@ describe("routeAgentInboundEvent", () => {
             {
               id: "invalid-pattern",
               when: { eventType: "click", eventKeyPattern: "(*" },
-              handler: { type: "builtin", name: "echo" },
+              postReplyHandler: { enabled: true, type: "builtin", name: "echo" },
             },
           ],
         },

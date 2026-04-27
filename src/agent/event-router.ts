@@ -1,11 +1,14 @@
 import { extractAgentId, extractMsgId } from "../shared/xml-parser.js";
 import type {
   ResolvedAgentAccount,
+  WecomAgentPostReplyHandlerConfig,
   WecomAgentEventRouteConfig,
   WecomAgentInboundMessage,
 } from "../types/index.js";
 import type { WecomRuntimeAuditEvent } from "../types/runtime-context.js";
 import { runAgentEventScript, type AgentEventScriptEnvelope } from "./script-runner.js";
+
+type ExecutableScriptHandler = WecomAgentPostReplyHandlerConfig;
 
 export type AgentInboundEventRouteResult = {
   handled: boolean;
@@ -14,6 +17,16 @@ export type AgentInboundEventRouteResult = {
   matchedRouteId?: string;
   reason: string;
   error?: string;
+};
+
+export type ResolvedAgentInboundEventRoute = {
+  matched: boolean;
+  route?: WecomAgentEventRouteConfig;
+  matchedRouteId?: string;
+  eventKey: string;
+  changeType: string;
+  reason: string;
+  chainToAgent: boolean;
 };
 
 // 统一比较口径：事件类型按小写处理
@@ -76,6 +89,13 @@ function buildScriptEnvelope(params: {
   msg: WecomAgentInboundMessage;
   matchedRuleId: string;
   handlerType: "node_script" | "python_script";
+  phase?: "post_reply";
+  reply?: {
+    sent: boolean;
+    responseMode: "passive_reply";
+    fallbackToSuccess: boolean;
+    reason: string | null;
+  };
 }): AgentEventScriptEnvelope {
   // 透传给外部脚本：标准化字段 + 原始 XML 解析对象 raw
   const rawAgentId = extractAgentId(params.msg);
@@ -86,6 +106,7 @@ function buildScriptEnvelope(params: {
   return {
     version: "1.0",
     channel: "wecom",
+    phase: params.phase,
     accountId: params.accountId,
     receivedAt: Date.now(),
     message: {
@@ -105,10 +126,15 @@ function buildScriptEnvelope(params: {
       matchedRuleId: params.matchedRuleId,
       handlerType: params.handlerType,
     },
+    reply: params.reply,
   };
 }
 
-export async function routeAgentInboundEvent(params: {
+function resolveExecutableHandler(route: WecomAgentEventRouteConfig): ExecutableScriptHandler | undefined {
+  return route.postReplyHandler?.enabled === true ? route.postReplyHandler : undefined;
+}
+
+export function resolveAgentInboundEventRoute(params: {
   agent: ResolvedAgentAccount;
   msgType: string;
   eventType: string;
@@ -117,12 +143,14 @@ export async function routeAgentInboundEvent(params: {
   msg: WecomAgentInboundMessage;
   log?: (msg: string) => void;
   auditSink?: (event: WecomRuntimeAuditEvent) => void;
-}): Promise<AgentInboundEventRouteResult> {
+}): ResolvedAgentInboundEventRoute {
   if (normalizeLower(params.msgType) !== "event") {
     return {
-      handled: false,
-      chainToAgent: false,
+      matched: false,
+      eventKey: "",
+      changeType: "",
       reason: "not_event",
+      chainToAgent: false,
     };
   }
 
@@ -160,31 +188,94 @@ export async function routeAgentInboundEvent(params: {
     // 未命中时由 unmatchedAction 决定：忽略 or 继续默认 AI 流程
     if (routing?.unmatchedAction === "forwardToAgent") {
       return {
-        handled: false,
-        chainToAgent: true,
+        matched: false,
+        eventKey,
+        changeType,
         reason: "unmatched_event_forwardToAgent",
+        chainToAgent: true,
       };
     }
     return {
-      handled: true,
-      chainToAgent: false,
+      matched: false,
+      eventKey,
+      changeType,
       reason: "unmatched_event_ignored",
+      chainToAgent: false,
     };
   }
 
   const matchedRouteId = matchedRoute.id?.trim() || `${params.eventType || "event"}:${eventKey || "default"}`;
   params.log?.(`[wecom-agent] event route matched routeId=${matchedRouteId} event=${params.eventType} eventKey=${eventKey || "N/A"}`);
+  return {
+    matched: true,
+    route: matchedRoute,
+    matchedRouteId,
+    eventKey,
+    changeType,
+    reason: "matched_event_route",
+    chainToAgent: false,
+  };
+}
 
-  if (matchedRoute.handler.type === "builtin") {
+export async function routeAgentInboundEvent(params: {
+  agent: ResolvedAgentAccount;
+  msgType: string;
+  eventType: string;
+  fromUser: string;
+  chatId?: string;
+  msg: WecomAgentInboundMessage;
+  log?: (msg: string) => void;
+  auditSink?: (event: WecomRuntimeAuditEvent) => void;
+  resolvedRoute?: ResolvedAgentInboundEventRoute;
+  postReplyContext?: {
+    sent: boolean;
+    responseMode: "passive_reply";
+    fallbackToSuccess: boolean;
+    reason: string | null;
+  };
+}): Promise<AgentInboundEventRouteResult> {
+  const resolvedRoute = params.resolvedRoute ?? resolveAgentInboundEventRoute({
+    agent: params.agent,
+    msgType: params.msgType,
+    eventType: params.eventType,
+    msg: params.msg,
+    log: params.log,
+    auditSink: params.auditSink,
+  });
+
+  if (!resolvedRoute.matched) {
+    return {
+      handled: resolvedRoute.reason === "unmatched_event_ignored",
+      chainToAgent: resolvedRoute.chainToAgent,
+      reason: resolvedRoute.reason,
+    };
+  }
+
+  const matchedRoute = resolvedRoute.route!;
+  const matchedRouteId = resolvedRoute.matchedRouteId!;
+  const eventKey = resolvedRoute.eventKey;
+  const changeType = resolvedRoute.changeType;
+  const executableHandler = resolveExecutableHandler(matchedRoute);
+
+  if (!executableHandler) {
+    return {
+      handled: true,
+      chainToAgent: false,
+      matchedRouteId,
+      reason: "route_without_handler",
+    };
+  }
+
+  if (executableHandler.type === "builtin") {
     // 内置 handler：当前仅实现 echo，用于联调和最小可用场景
-    if ((matchedRoute.handler.name ?? "echo") === "echo") {
+    if ((executableHandler.name ?? "echo") === "echo") {
       const replyText = [`event=${params.eventType}`,
         eventKey ? `eventKey=${eventKey}` : "",
         changeType ? `changeType=${changeType}` : "",
       ].filter(Boolean).join(" ");
       return {
         handled: true,
-        chainToAgent: matchedRoute.handler.chainToAgent === true,
+        chainToAgent: executableHandler.chainToAgent === true,
         replyText,
         matchedRouteId,
         reason: "builtin_echo",
@@ -192,7 +283,7 @@ export async function routeAgentInboundEvent(params: {
     }
   }
 
-  if (matchedRoute.handler.type !== "node_script" && matchedRoute.handler.type !== "python_script") {
+  if (executableHandler.type !== "node_script" && executableHandler.type !== "python_script") {
     return {
       handled: true,
       chainToAgent: false,
@@ -205,7 +296,7 @@ export async function routeAgentInboundEvent(params: {
     // 外部脚本 handler：通过 stdin 输入 envelope，stdout 返回 JSON 协议
     const { response: scriptResponse, meta } = await runAgentEventScript({
       runtime: params.agent.config.scriptRuntime,
-      handler: matchedRoute.handler,
+      handler: executableHandler,
       envelope: buildScriptEnvelope({
         accountId: params.agent.accountId,
         msgType: params.msgType,
@@ -217,7 +308,9 @@ export async function routeAgentInboundEvent(params: {
         chatId: params.chatId,
         msg: params.msg,
         matchedRuleId: matchedRouteId,
-        handlerType: matchedRoute.handler.type,
+        handlerType: executableHandler.type,
+        phase: params.postReplyContext ? "post_reply" : undefined,
+        reply: params.postReplyContext,
       }),
     });
 
@@ -226,7 +319,7 @@ export async function routeAgentInboundEvent(params: {
       category: "inbound",
       messageId: extractMsgId(params.msg) ?? undefined,
       summary:
-        `event route script ok routeId=${matchedRouteId} handler=${matchedRoute.handler.type} ` +
+        `event route script ok routeId=${matchedRouteId} handler=${executableHandler.type} ` +
         `event=${params.eventType} durationMs=${meta.durationMs} exitCode=${meta.exitCode ?? "null"}`,
       raw: {
         transport: "agent-callback",
@@ -238,22 +331,22 @@ export async function routeAgentInboundEvent(params: {
     return {
       handled: true,
       chainToAgent:
-        scriptResponse.chainToAgent === true || matchedRoute.handler.chainToAgent === true,
+        scriptResponse.chainToAgent === true || executableHandler.chainToAgent === true,
       replyText: scriptResponse.action === "reply_text" ? scriptResponse.reply?.text : undefined,
       matchedRouteId,
-      reason: `script_${matchedRoute.handler.type}`,
+      reason: `script_${executableHandler.type}`,
     };
   } catch (err) {
     // 脚本失败时不抛出到上层，转为“已处理 + 审计错误”，避免中断 webhook 主流程
     const message = err instanceof Error ? err.message : String(err);
     params.log?.(
-      `[wecom-agent] event route script failed routeId=${matchedRouteId} handler=${matchedRoute.handler.type} error=${message}`,
+      `[wecom-agent] event route script failed routeId=${matchedRouteId} handler=${executableHandler.type} error=${message}`,
     );
     params.auditSink?.({
       transport: "agent-callback",
       category: "runtime-error",
       messageId: extractMsgId(params.msg) ?? undefined,
-      summary: `event route script failed routeId=${matchedRouteId} handler=${matchedRoute.handler.type} event=${params.eventType}`,
+      summary: `event route script failed routeId=${matchedRouteId} handler=${executableHandler.type} event=${params.eventType}`,
       raw: {
         transport: "agent-callback",
         envelopeType: "xml",
@@ -265,7 +358,7 @@ export async function routeAgentInboundEvent(params: {
       handled: true,
       chainToAgent: false,
       matchedRouteId,
-      reason: `script_${matchedRoute.handler.type}_error`,
+      reason: `script_${executableHandler.type}_error`,
       error: message,
     };
   }
