@@ -62,7 +62,13 @@ POST https://qyapi.weixin.qq.com/cgi-bin/menu/create?access_token=ACCESS_TOKEN&a
 
 ## 配置事件路由
 
-在 `openclaw.json` 中配置 `eventRouting` 和 `scriptRuntime`：
+在 `openclaw.json` 中需要同时配置三块：
+
+1. `inboundPolicy`：放通菜单事件（不配这块，`click/view` 默认不会进入路由）
+2. `eventRouting`：定义匹配规则与处理器
+3. `scriptRuntime`：启用并约束脚本执行
+
+推荐最小可用配置（矩阵模式）：
 
 ```json
 {
@@ -71,6 +77,22 @@ POST https://qyapi.weixin.qq.com/cgi-bin/menu/create?access_token=ACCESS_TOKEN&a
       "accounts": {
         "your-account": {
           "agent": {
+            "inboundPolicy": {
+              "eventEnabled": true,
+              "eventPolicy": {
+                "allowedEventTypes": [
+                  "click",
+                  "view",
+                  "view_miniprogram",
+                  "scancode_push",
+                  "scancode_waitmsg",
+                  "pic_sysphoto",
+                  "pic_photo_or_album",
+                  "pic_weixin",
+                  "location_select"
+                ]
+              }
+            },
             "eventRouting": {
               "unmatchedAction": "forwardToAgent",
               "routes": [
@@ -111,7 +133,7 @@ POST https://qyapi.weixin.qq.com/cgi-bin/menu/create?access_token=ACCESS_TOKEN&a
             },
             "scriptRuntime": {
               "enabled": true,
-              "allowPaths": ["/path/to/scripts"],
+              "allowPaths": ["./scripts/wecom"],
               "defaultTimeoutMs": 10000,
               "pythonCommand": "python3",
               "nodeCommand": "node"
@@ -124,7 +146,31 @@ POST https://qyapi.weixin.qq.com/cgi-bin/menu/create?access_token=ACCESS_TOKEN&a
 }
 ```
 
+> 如果你使用的是 legacy 单账号模式，也可以写在 `channels.wecom.agent` 下，字段结构完全相同。
+
 ## 事件路由配置说明
+
+### inboundPolicy（事件放通开关，菜单事件必配）
+
+`eventRouting` 只负责“如何路由”，不负责“是否允许进入处理链”。
+
+真正决定事件是否进入处理链的是 `inboundPolicy`：
+
+- `eventEnabled: false`：直接关闭所有 event 处理。
+- `eventEnabled: true` + `allowedEventTypes`：放通指定事件类型。
+- 仅配置 `eventRouting` 而不配置 `allowedEventTypes` 时，`click/view` 这类菜单事件通常不会被处理。
+
+建议菜单场景至少放通以下类型：
+
+- `click`
+- `view`
+- `view_miniprogram`
+- `scancode_push`
+- `scancode_waitmsg`
+- `pic_sysphoto`
+- `pic_photo_or_album`
+- `pic_weixin`
+- `location_select`
 
 ### unmatchedAction（未匹配事件的处理方式）
 
@@ -132,6 +178,8 @@ POST https://qyapi.weixin.qq.com/cgi-bin/menu/create?access_token=ACCESS_TOKEN&a
 
 - `ignore` - 未匹配的事件直接忽略，不处理也不回复
 - `forwardToAgent` - 未匹配的事件传递给 Agent（AI）处理
+
+默认值等价于 `ignore`（未配置时会忽略未匹配事件）。
 
 **注意：** 这个配置只影响**未匹配路由**的事件。如果事件匹配了路由，则由路由的 handler 决定后续行为。
 
@@ -144,6 +192,13 @@ POST https://qyapi.weixin.qq.com/cgi-bin/menu/create?access_token=ACCESS_TOKEN&a
 | `eventKeyPrefix` | 前缀匹配事件 key |
 | `eventKeyPattern` | 正则匹配事件 key |
 | `changeType` | 通讯录变更类型，如 `create_user` |
+
+补充规则：
+
+- `routes` 按声明顺序匹配，命中第一条后立即执行，不会继续向下匹配。
+- `eventType` / `changeType` 匹配时会忽略大小写。
+- `eventKey` / `eventKeyPrefix` 保留大小写，仅做首尾空白清理。
+- `eventKeyPattern` 是正则；如果正则写错，该路由会被当作“不匹配”，并记录运行时错误日志。
 
 ### Handler 类型
 
@@ -414,7 +469,8 @@ script path is not allowed: /path/to/script.py
 
 **解决方案：**
 - 确保脚本路径在 `scriptRuntime.allowPaths` 配置的目录下
-- 路径必须是绝对路径
+- `entry` 和 `allowPaths` 都支持相对路径（相对插件运行工作目录解析）
+- 生产环境建议统一使用绝对路径，避免启动目录变化导致路径偏移
 
 ### 4. 脚本运行时未启用
 
