@@ -28,6 +28,15 @@ function toNumber(value: number | string | undefined): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function normalizeAllowedEventTypes(value: string[] | undefined): string[] | undefined {
+  // 配置层允许大小写/空白混写，这里统一规整为去重后的小写列表
+  if (!Array.isArray(value)) return undefined;
+  const normalized = value
+    .map((entry) => String(entry ?? "").trim().toLowerCase())
+    .filter(Boolean);
+  return normalized.length > 0 ? Array.from(new Set(normalized)) : undefined;
+}
+
 function resolveBotAccount(
   accountId: string,
   config: WecomBotConfig,
@@ -75,6 +84,11 @@ function resolveAgentAccount(
   const callbackConfigured = Boolean(config.token && config.encodingAESKey);
   const normalizedAgentSecret = config.agentSecret?.trim() || config.corpSecret?.trim() || "";
   const apiConfigured = Boolean(config.corpId && normalizedAgentSecret && agentId);
+  // 将 event 相关策略提前归一到运行态，避免每次消息都重复解析配置
+  const eventEnabled = config.inboundPolicy?.eventEnabled;
+  const allowedEventTypes = normalizeAllowedEventTypes(
+    config.inboundPolicy?.eventPolicy?.allowedEventTypes,
+  );
   return {
     accountId,
     configured: callbackConfigured || apiConfigured,
@@ -85,6 +99,8 @@ function resolveAgentAccount(
     agentId,
     token: config.token,
     encodingAESKey: config.encodingAESKey,
+    eventEnabled,
+    allowedEventTypes,
     config,
     network,
   };

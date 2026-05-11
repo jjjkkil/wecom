@@ -33,6 +33,7 @@ import {
   extractAgentId,
   extractToUser,
 } from "../shared/xml-parser.js";
+import { routeAgentInboundEvent } from "./event-router.js";
 import { resolveOutboundMediaAsset } from "../shared/media-asset.js";
 import {
   downloadAgentApiMedia,
@@ -192,6 +193,8 @@ export function shouldProcessAgentInboundMessage(params: {
   fromUser: string;
   chatId?: string;
   eventType?: string;
+  eventEnabled?: boolean;
+  allowedEventTypes?: string[];
 }): AgentInboundProcessDecision {
   const msgType = String(params.msgType ?? "")
     .trim()
@@ -204,7 +207,8 @@ export function shouldProcessAgentInboundMessage(params: {
     .toLowerCase();
 
   if (msgType === "event") {
-    const allowedEvents = [
+    // 兼容旧行为：未配置 event 策略时，继续沿用历史白名单
+    const compatibilityAllowedEvents = [
       "subscribe",
       "enter_agent",
       "batch_job_result",
@@ -220,6 +224,26 @@ export function shouldProcessAgentInboundMessage(params: {
       "smartsheet_field_change",
       "smartsheet_view_change",
     ];
+    const configuredAllowedEvents = Array.isArray(params.allowedEventTypes)
+      ? params.allowedEventTypes
+          .map((entry) => String(entry ?? "").trim().toLowerCase())
+          .filter(Boolean)
+      : [];
+    const hasEventConfig = params.eventEnabled !== undefined || configuredAllowedEvents.length > 0;
+
+    // 显式关闭 event 时直接拒绝，优先级最高
+    if (params.eventEnabled === false) {
+      return {
+        shouldProcess: false,
+        reason: "event_disabled",
+      };
+    }
+
+    // 配置存在时：历史白名单 + 配置白名单并集，保证平滑迁移
+    const allowedEvents = hasEventConfig
+      ? Array.from(new Set([...compatibilityAllowedEvents, ...configuredAllowedEvents]))
+      : compatibilityAllowedEvents;
+
     if (
       allowedEvents.includes(eventType) ||
       eventType.startsWith("doc_") ||
@@ -276,6 +300,72 @@ function normalizeAgentId(value: unknown): number | undefined {
   if (!raw) return undefined;
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function resolveAgentReplyTransportContext(params: {
+  agent: ResolvedAgentAccount;
+  msg: WecomAgentInboundMessage;
+  fromUser: string;
+  chatId?: string;
+  log?: (msg: string) => void;
+  error?: (msg: string) => void;
+}): {
+  upstreamAgent?: ResolvedAgentAccount;
+  primaryAgentForUpstream?: ResolvedAgentAccount;
+  upstreamReplyTarget?: { toUser: string | undefined; chatId: string | undefined };
+  effectiveReplyTarget: { toUser: string | undefined; chatId: string | undefined };
+} {
+  // 事件路由也可能需要即时回包，这里复用普通消息的上下游目标判定逻辑
+  const { agent, msg, fromUser, chatId, log, error } = params;
+  const isGroup = Boolean(chatId);
+  const peerId = isGroup ? chatId! : fromUser;
+  const replyTarget = isGroup
+    ? ({ toUser: undefined, chatId: peerId } as const)
+    : ({ toUser: fromUser, chatId: undefined } as const);
+  const toUserName = extractToUser(msg);
+  const isUpstreamUser = detectUpstreamUser({
+    messageToUserName: toUserName,
+    primaryCorpId: agent.corpId,
+  });
+
+  if (!isUpstreamUser) {
+    return {
+      upstreamAgent: undefined,
+      primaryAgentForUpstream: undefined,
+      upstreamReplyTarget: undefined,
+      effectiveReplyTarget: replyTarget,
+    };
+  }
+
+  log?.(`[wecom-agent] detected upstream user during event routing: from=${fromUser} toCorpId=${toUserName}`);
+  const upstreamConfig = resolveUpstreamCorpConfig({
+    upstreamCorpId: toUserName,
+    upstreamCorps: agent.config.upstreamCorps,
+  });
+  if (!upstreamConfig) {
+    error?.(
+      `[wecom-agent] upstream event detected but no upstream config for corpId=${toUserName}; fallback to primary agent target`,
+    );
+    return {
+      upstreamAgent: undefined,
+      primaryAgentForUpstream: undefined,
+      upstreamReplyTarget: undefined,
+      effectiveReplyTarget: replyTarget,
+    };
+  }
+
+  const upstreamAgent = createUpstreamAgentConfig({
+    baseAgent: agent,
+    upstreamCorpId: toUserName,
+    upstreamAgentId: upstreamConfig.agentId,
+  });
+
+  return {
+    upstreamAgent,
+    primaryAgentForUpstream: agent,
+    upstreamReplyTarget: replyTarget,
+    effectiveReplyTarget: replyTarget,
+  };
 }
 
 /**
@@ -391,10 +481,63 @@ async function handleMessageCallback(params: AgentWebhookParams): Promise<boolea
       fromUser,
       chatId,
       eventType,
+      eventEnabled: agent.eventEnabled,
+      allowedEventTypes: agent.allowedEventTypes,
     });
     if (!decision.shouldProcess) {
       log?.(
         `[wecom-agent] skip processing: type=${msgType || "unknown"} event=${eventType || "N/A"} from=${fromUser || "N/A"} reason=${decision.reason}`,
+      );
+      return true;
+    }
+
+    const routedEvent = await routeAgentInboundEvent({
+      agent,
+      msgType,
+      eventType,
+      fromUser,
+      chatId,
+      msg,
+      log,
+      auditSink,
+    });
+    // 路由器返回文本时，先即时回包给用户/群，再决定是否进入默认 AI 流程
+    if (routedEvent.handled && routedEvent.replyText?.trim()) {
+      const replyContext = resolveAgentReplyTransportContext({
+        agent,
+        msg,
+        fromUser,
+        chatId,
+        log,
+        error,
+      });
+      try {
+        if (replyContext.upstreamAgent && replyContext.primaryAgentForUpstream) {
+          await sendUpstreamAgentApiText({
+            upstreamAgent: replyContext.upstreamAgent,
+            primaryAgent: replyContext.primaryAgentForUpstream,
+            ...(replyContext.upstreamReplyTarget ?? replyContext.effectiveReplyTarget),
+            text: routedEvent.replyText,
+          });
+        } else {
+          await sendAgentApiText({
+            agent,
+            ...replyContext.effectiveReplyTarget,
+            text: routedEvent.replyText,
+          });
+        }
+        params.touchTransportSession?.({ lastOutboundAt: Date.now(), running: true });
+        log?.(
+          `[wecom-agent] event route reply delivered routeId=${routedEvent.matchedRouteId ?? "N/A"} to=${chatId ? `chat:${chatId}` : fromUser}`,
+        );
+      } catch (err) {
+        error?.(`[wecom-agent] event route reply failed: ${String(err)}`);
+      }
+    }
+    // routedEvent 已完全消费该事件时，终止后续默认处理链
+    if (routedEvent.handled && !routedEvent.chainToAgent) {
+      log?.(
+        `[wecom-agent] event route handled routeId=${routedEvent.matchedRouteId ?? "N/A"} reason=${routedEvent.reason}`,
       );
       return true;
     }
@@ -420,9 +563,11 @@ async function handleMessageCallback(params: AgentWebhookParams): Promise<boolea
     return true;
   } catch (err) {
     error?.(`[wecom-agent] callback failed: ${String(err)}`);
-    res.statusCode = 400;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end(`error - 回调处理失败${ERROR_HELP}`);
+    if (!res.headersSent && !res.writableEnded) {
+      res.statusCode = 400;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end(`error - 回调处理失败${ERROR_HELP}`);
+    }
     return true;
   }
 }

@@ -3,6 +3,61 @@ export interface DmConfig {
   allowFrom?: (string | number)[];
 }
 
+export interface AgentEventPolicyConfig {
+  allowedEventTypes?: string[];
+}
+
+export interface AgentInboundPolicyConfig {
+  eventEnabled?: boolean;
+  eventPolicy?: AgentEventPolicyConfig;
+}
+
+export interface AgentEventRouteMatchConfig {
+  eventType?: string;
+  changeType?: string;
+  eventKey?: string;
+  eventKeyPrefix?: string;
+  eventKeyPattern?: string;
+}
+
+export interface AgentEventRouteHandlerBuiltinConfig {
+  type: "builtin";
+  name?: "echo";
+  chainToAgent?: boolean;
+}
+
+export interface AgentEventRouteHandlerScriptConfig {
+  type: "node_script" | "python_script";
+  entry: string;
+  timeoutMs?: number;
+  chainToAgent?: boolean;
+}
+
+export type AgentEventRouteHandlerConfig =
+  | AgentEventRouteHandlerBuiltinConfig
+  | AgentEventRouteHandlerScriptConfig;
+
+export interface AgentEventRouteConfig {
+  id?: string;
+  when?: AgentEventRouteMatchConfig;
+  handler: AgentEventRouteHandlerConfig;
+}
+
+export interface AgentEventRoutingConfig {
+  unmatchedAction?: "ignore" | "forwardToAgent";
+  routes?: AgentEventRouteConfig[];
+}
+
+export interface AgentScriptRuntimeConfig {
+  enabled?: boolean;
+  allowPaths?: string[];
+  maxStdoutBytes?: number;
+  maxStderrBytes?: number;
+  defaultTimeoutMs?: number;
+  pythonCommand?: string;
+  nodeCommand?: string;
+}
+
 export interface MediaConfig {
   tempDir?: string;
   retentionHours?: number;
@@ -53,6 +108,9 @@ export interface AgentConfig {
   encodingAESKey: string;
   welcomeText?: string;
   dm?: DmConfig;
+  inboundPolicy?: AgentInboundPolicyConfig;
+  eventRouting?: AgentEventRoutingConfig;
+  scriptRuntime?: AgentScriptRuntimeConfig;
 }
 
 export interface DynamicAgentsConfig {
