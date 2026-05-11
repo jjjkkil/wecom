@@ -8,6 +8,7 @@ import type {
 export type AgentEventScriptEnvelope = {
   version: "1.0";
   channel: "wecom";
+  phase?: "reply" | "post_reply";
   accountId: string;
   receivedAt: number;
   message: {
@@ -27,11 +28,20 @@ export type AgentEventScriptEnvelope = {
     matchedRuleId: string;
     handlerType: "node_script" | "python_script";
   };
+  reply?: {
+    sent: boolean;
+    responseMode: "passive_reply";
+    fallbackToSuccess: boolean;
+    reason: string | null;
+  };
 };
 
 export type AgentEventScriptResponse = {
   ok?: boolean;
   action?: "none" | "reply_text";
+  responseMode?: "passive_reply";
+  replyMessage?: string;
+  skipPostReplyHandler?: boolean;
   reply?: {
     text?: string;
   };

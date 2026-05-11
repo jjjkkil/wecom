@@ -38,10 +38,23 @@ export type WecomAgentEventRouteHandlerConfig =
       chainToAgent?: boolean;
     };
 
+export type WecomAgentReplyHandlerConfig = {
+  type: "node_script" | "python_script";
+  entry: string;
+  timeoutMs?: number;
+  responseMode?: "default" | "passive_reply";
+  allowSkipPostReplyHandler?: boolean;
+};
+
+export type WecomAgentPostReplyHandlerConfig = {
+  enabled?: boolean;
+} & WecomAgentEventRouteHandlerConfig;
+
 export type WecomAgentEventRouteConfig = {
   id?: string;
   when?: WecomAgentEventRouteMatchConfig;
-  handler: WecomAgentEventRouteHandlerConfig;
+  replyHandler?: WecomAgentReplyHandlerConfig;
+  postReplyHandler?: WecomAgentPostReplyHandlerConfig;
 };
 
 export type WecomAgentEventRoutingConfig = {

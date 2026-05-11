@@ -65,7 +65,7 @@ POST https://qyapi.weixin.qq.com/cgi-bin/menu/create?access_token=ACCESS_TOKEN&a
 在 `openclaw.json` 中需要同时配置三块：
 
 1. `inboundPolicy`：放通菜单事件（不配这块，`click/view` 默认不会进入路由）
-2. `eventRouting`：定义匹配规则与处理器
+2. `eventRouting`：定义匹配规则与 `postReplyHandler`
 3. `scriptRuntime`：启用并约束脚本执行
 
 推荐最小可用配置（矩阵模式）：
@@ -102,7 +102,8 @@ POST https://qyapi.weixin.qq.com/cgi-bin/menu/create?access_token=ACCESS_TOKEN&a
                     "eventType": "click", 
                     "eventKey": "TEST_CLICK_PY" 
                   },
-                  "handler": { 
+                  "postReplyHandler": {
+                    "enabled": true,
                     "type": "python_script", 
                     "entry": "/path/to/script.py" 
                   }
@@ -113,7 +114,8 @@ POST https://qyapi.weixin.qq.com/cgi-bin/menu/create?access_token=ACCESS_TOKEN&a
                     "eventType": "click", 
                     "eventKey": "TEST_CLICK_JS" 
                   },
-                  "handler": { 
+                  "postReplyHandler": {
+                    "enabled": true,
                     "type": "node_script", 
                     "entry": "/path/to/script.mjs" 
                   }
@@ -124,7 +126,8 @@ POST https://qyapi.weixin.qq.com/cgi-bin/menu/create?access_token=ACCESS_TOKEN&a
                     "eventType": "click", 
                     "eventKey": "MENU_INFO" 
                   },
-                  "handler": { 
+                  "postReplyHandler": {
+                    "enabled": true,
                     "type": "builtin", 
                     "name": "echo" 
                   }
@@ -181,7 +184,7 @@ POST https://qyapi.weixin.qq.com/cgi-bin/menu/create?access_token=ACCESS_TOKEN&a
 
 默认值等价于 `ignore`（未配置时会忽略未匹配事件）。
 
-**注意：** 这个配置只影响**未匹配路由**的事件。如果事件匹配了路由，则由路由的 handler 决定后续行为。
+**注意：** 这个配置只影响**未匹配路由**的事件。如果事件匹配了路由，则由路由的 `postReplyHandler` 决定后续行为。
 
 ### 路由匹配条件 (when)
 
@@ -200,7 +203,7 @@ POST https://qyapi.weixin.qq.com/cgi-bin/menu/create?access_token=ACCESS_TOKEN&a
 - `eventKey` / `eventKeyPrefix` 保留大小写，仅做首尾空白清理。
 - `eventKeyPattern` 是正则；如果正则写错，该路由会被当作“不匹配”，并记录运行时错误日志。
 
-### Handler 类型
+### postReplyHandler 类型
 
 | 类型 | 说明 |
 |------|------|
@@ -208,19 +211,26 @@ POST https://qyapi.weixin.qq.com/cgi-bin/menu/create?access_token=ACCESS_TOKEN&a
 | `node_script` | Node.js 脚本 |
 | `python_script` | Python 脚本 |
 
+补充说明：
+
+- 菜单事件路由现在统一使用 `postReplyHandler`
+- 普通菜单事件不需要配置 `replyHandler`
+- 只有当你要做 5 秒内被动回复时，才需要额外引入 `replyHandler`
+
 ### `chainToAgent` 的两个来源
 
 `chainToAgent` 现在只表达一个意思：当前事件处理完成后，是否继续进入默认 Agent（AI）流程。
 
 这个开关有两个输入来源，但它们控制的是同一件事，不是两个不同功能：
 
-#### 1. Handler 配置里的 `chainToAgent`
+#### 1. `postReplyHandler` 配置里的 `chainToAgent`
 
-在 `openclaw.json` 的 handler 中配置：
+在 `openclaw.json` 的 `postReplyHandler` 中配置：
 
 ```json
 {
-  "handler": {
+  "postReplyHandler": {
+    "enabled": true,
     "type": "python_script",
     "entry": "/path/to/script.py",
     "chainToAgent": true
@@ -250,7 +260,7 @@ POST https://qyapi.weixin.qq.com/cgi-bin/menu/create?access_token=ACCESS_TOKEN&a
 
 **特点：**
 - 这是动态决策，适合脚本根据业务条件决定是否继续走 Agent
-- 当 handler 没有把 `chainToAgent` 设为 `true` 时，以脚本返回为准
+- 当 `postReplyHandler` 没有把 `chainToAgent` 设为 `true` 时，以脚本返回为准
 - 如果脚本不返回该字段，默认为 `false`
 
 #### 实际合并规则
@@ -259,19 +269,19 @@ POST https://qyapi.weixin.qq.com/cgi-bin/menu/create?access_token=ACCESS_TOKEN&a
 
 ```ts
 finalChainToAgent =
-  handler.chainToAgent === true || scriptResponse.chainToAgent === true;
+  postReplyHandler.chainToAgent === true || scriptResponse.chainToAgent === true;
 ```
 
 可以把它理解为：
 
-- `handler.chainToAgent` 是“静态放行开关”
+- `postReplyHandler.chainToAgent` 是“静态放行开关”
 - `scriptResponse.chainToAgent` 是“脚本运行后的动态放行结果”
 - 任意一方明确返回 `true`，都会继续进入默认 Agent 流程
 - 两边都不是 `true` 时，才会在当前路由处理后结束
 
 #### 行为总结
 
-| Handler 配置 | 脚本返回 | 最终行为 |
+| postReplyHandler 配置 | 脚本返回 | 最终行为 |
 |-------------|---------|---------|
 | `true` | `false` | `true` |
 | `true` | `true` | `true` |
@@ -285,12 +295,13 @@ finalChainToAgent =
 #### 推荐做法
 
 **场景 1：脚本完全控制**
-- Handler 配置中**不设置** `chainToAgent`
+- `postReplyHandler` 配置中**不设置** `chainToAgent`
 - 脚本根据需要返回 `true` 或 `false`
 
 ```json
 // openclaw.json
-"handler": {
+"postReplyHandler": {
+  "enabled": true,
   "type": "python_script",
   "entry": "/path/to/script.py"
   // 不写 chainToAgent
@@ -306,12 +317,13 @@ else:
 ```
 
 **场景 2：固定继续走 Agent**
-- Handler 配置中设置 `"chainToAgent": true`
+- `postReplyHandler` 配置中设置 `"chainToAgent": true`
 - 此时即使脚本返回 `false`，最终仍会继续进入默认 Agent 流程
 
 ```json
 // openclaw.json - 固定走 AI 流程
-"handler": {
+"postReplyHandler": {
+  "enabled": true,
   "type": "python_script",
   "entry": "/path/to/script.py",
   "chainToAgent": true
@@ -319,12 +331,12 @@ else:
 ```
 
 **场景 3：固定不继续走 Agent**
-- 不要依赖 handler 里的 `"chainToAgent": false`
-- 应该保持 handler 不写该字段，并让脚本稳定返回 `false`
+- 不要依赖 `postReplyHandler` 里的 `"chainToAgent": false`
+- 应该保持 `postReplyHandler` 不写该字段，并让脚本稳定返回 `false`
 
 也就是说：
 
-- 想“固定继续”，可以用 handler 配置 `true`
+- 想“固定继续”，可以用 `postReplyHandler` 配置 `true`
 - 想“固定停止”，应由脚本返回 `false` 来保证
 
 ## 脚本编写规范
@@ -502,7 +514,7 @@ script execution timed out after 5000ms
 ```
 
 **解决方案：**
-- 增加 `timeoutMs` 配置（handler 级别或 `defaultTimeoutMs` 全局）
+- 增加 `timeoutMs` 配置（`postReplyHandler` 级别或 `defaultTimeoutMs` 全局）
 - 优化脚本性能
 
 ### 7. Access Token 过期

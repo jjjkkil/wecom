@@ -33,7 +33,10 @@ import {
   extractAgentId,
   extractToUser,
 } from "../shared/xml-parser.js";
-import { routeAgentInboundEvent } from "./event-router.js";
+import { computeWecomMsgSignature, encryptWecomPlaintext } from "../crypto.js";
+import { buildEncryptedXmlResponse } from "../crypto/xml.js";
+import { resolveAgentInboundEventRoute, routeAgentInboundEvent } from "./event-router.js";
+import { runAgentEventScript, type AgentEventScriptEnvelope } from "./script-runner.js";
 import { resolveOutboundMediaAsset } from "../shared/media-asset.js";
 import {
   downloadAgentApiMedia,
@@ -47,6 +50,7 @@ import type {
   ResolvedAgentAccount,
   ReplyPayload,
   UnifiedInboundEvent,
+  WecomAgentReplyHandlerConfig,
   WecomInboundKind,
 } from "../types/index.js";
 import type { WecomAgentInboundMessage } from "../types/index.js";
@@ -378,6 +382,218 @@ function resolveQueryParams(req: IncomingMessage): URLSearchParams {
   return url.searchParams;
 }
 
+function looksLikePassiveReplyXml(xml: string): boolean {
+  return /^\s*<xml(?:\s|>)/i.test(xml);
+}
+
+function classifyReplyFallbackReason(err: unknown): string {
+  const message = String(err ?? "").toLowerCase();
+  if (message.includes("timed out")) return "reply_timeout";
+  if (message.includes("sign") || message.includes("signature")) return "reply_sign_failed";
+  if (message.includes("json") || message.includes("replymessage") || message.includes("xml")) {
+    return "reply_invalid_output";
+  }
+  return "reply_failed";
+}
+
+function buildReplyHandlerEnvelope(params: {
+  accountId: string;
+  eventType: string;
+  fromUser: string;
+  toUser?: string;
+  chatId?: string;
+  msg: WecomAgentInboundMessage;
+  matchedRouteId: string;
+  handler: WecomAgentReplyHandlerConfig;
+  deadlineMs: number;
+}): AgentEventScriptEnvelope & {
+  phase: "reply";
+  responseMode: "passive_reply";
+  deadlineMs: number;
+} {
+  const rawAgentId = normalizeAgentId(extractAgentId(params.msg)) ?? null;
+  return {
+    version: "1.0",
+    channel: "wecom",
+    phase: "reply",
+    responseMode: "passive_reply",
+    deadlineMs: params.deadlineMs,
+    accountId: params.accountId,
+    receivedAt: Date.now(),
+    message: {
+      msgType: "event",
+      eventType: params.eventType,
+      eventKey: String(params.msg.EventKey ?? "").trim() || null,
+      changeType: String(params.msg.ChangeType ?? "").trim().toLowerCase() || null,
+      fromUser: params.fromUser,
+      toUser: params.toUser ?? null,
+      chatId: params.chatId ?? null,
+      agentId: rawAgentId,
+      createTime:
+        typeof params.msg.CreateTime === "number"
+          ? params.msg.CreateTime
+          : Number.isFinite(Number(params.msg.CreateTime))
+            ? Number(params.msg.CreateTime)
+            : null,
+      msgId: extractMsgId(params.msg) ?? null,
+      raw: { ...(params.msg as Record<string, unknown>) },
+    },
+    route: {
+      matchedRuleId: params.matchedRouteId,
+      handlerType: params.handler.type,
+    },
+  };
+}
+
+function buildEncryptedAgentPassiveReply(params: {
+  agent: ResolvedAgentAccount;
+  plaintextXml: string;
+  timestamp: string;
+  nonce: string;
+}): string {
+  const encrypt = encryptWecomPlaintext({
+    encodingAESKey: params.agent.encodingAESKey,
+    receiveId: params.agent.corpId,
+    plaintext: params.plaintextXml,
+  });
+  const signature = computeWecomMsgSignature({
+    token: params.agent.token,
+    timestamp: params.timestamp,
+    nonce: params.nonce,
+    encrypt,
+  });
+  return buildEncryptedXmlResponse({
+    encrypt,
+    signature,
+    timestamp: params.timestamp,
+    nonce: params.nonce,
+  });
+}
+
+async function deliverEventRouteReply(params: {
+  agent: ResolvedAgentAccount;
+  msg: WecomAgentInboundMessage;
+  fromUser: string;
+  chatId?: string;
+  replyText: string;
+  matchedRouteId?: string;
+  log?: (msg: string) => void;
+  error?: (msg: string) => void;
+  touchTransportSession?: (patch: TransportSessionPatch) => void;
+}): Promise<void> {
+  const replyContext = resolveAgentReplyTransportContext({
+    agent: params.agent,
+    msg: params.msg,
+    fromUser: params.fromUser,
+    chatId: params.chatId,
+    log: params.log,
+    error: params.error,
+  });
+  // postReplyHandler 的即时回复也必须覆盖上下游用户；
+  // 一旦当前事件在这里被 complete 掉，后面的默认 AI 流程就不会再兜底发送。
+  if (replyContext.upstreamAgent && replyContext.primaryAgentForUpstream) {
+    await sendUpstreamAgentApiText({
+      upstreamAgent: replyContext.upstreamAgent,
+      primaryAgent: replyContext.primaryAgentForUpstream,
+      ...(replyContext.upstreamReplyTarget ?? replyContext.effectiveReplyTarget),
+      text: params.replyText,
+    });
+  } else {
+    await sendAgentApiText({
+      agent: params.agent,
+      ...replyContext.effectiveReplyTarget,
+      text: params.replyText,
+    });
+  }
+  params.touchTransportSession?.({ lastOutboundAt: Date.now(), running: true });
+  params.log?.(
+    `[wecom-agent] event route reply delivered routeId=${params.matchedRouteId ?? "N/A"} to=${params.chatId ? `chat:${params.chatId}` : params.fromUser}`,
+  );
+}
+
+async function executePassiveReplyHandler(params: {
+  agent: ResolvedAgentAccount;
+  handler: WecomAgentReplyHandlerConfig;
+  matchedRouteId: string;
+  eventType: string;
+  fromUser: string;
+  chatId?: string;
+  msg: WecomAgentInboundMessage;
+  timestamp: string;
+  nonce: string;
+  res: ServerResponse;
+  log?: (msg: string) => void;
+  error?: (msg: string) => void;
+  auditSink?: (event: WecomRuntimeAuditEvent) => void;
+}): Promise<{ fallbackToSuccess: boolean; fallbackReason?: string; skipPostReplyHandler: boolean }> {
+  const deadlineMs = params.handler.timeoutMs ?? params.agent.config.scriptRuntime?.defaultTimeoutMs ?? 4500;
+  try {
+    const { response } = await runAgentEventScript({
+      runtime: params.agent.config.scriptRuntime,
+      handler: params.handler,
+      envelope: buildReplyHandlerEnvelope({
+        accountId: params.agent.accountId,
+        eventType: params.eventType,
+        fromUser: params.fromUser,
+        toUser: typeof params.msg.ToUserName === "string" ? params.msg.ToUserName : undefined,
+        chatId: params.chatId,
+        msg: params.msg,
+        matchedRouteId: params.matchedRouteId,
+        handler: params.handler,
+        deadlineMs,
+      }),
+    });
+
+    const replyMessage = String(response.replyMessage ?? "").trim();
+    if (!replyMessage) {
+      throw new Error("replyMessage missing");
+    }
+    if (!looksLikePassiveReplyXml(replyMessage)) {
+      throw new Error("replyMessage is not a valid xml root");
+    }
+
+    const xml = buildEncryptedAgentPassiveReply({
+      agent: params.agent,
+      plaintextXml: replyMessage,
+      timestamp: params.timestamp || `${Math.floor(Date.now() / 1000)}`,
+      nonce: params.nonce || `${Date.now()}`,
+    });
+    params.res.statusCode = 200;
+    params.res.setHeader("Content-Type", "application/xml; charset=utf-8");
+    params.res.end(xml);
+    return {
+      fallbackToSuccess: false,
+      skipPostReplyHandler:
+        params.handler.allowSkipPostReplyHandler === true && response.skipPostReplyHandler === true,
+    };
+  } catch (err) {
+    const fallbackReason = classifyReplyFallbackReason(err);
+    params.error?.(
+      `[wecom-agent] passive reply failed routeId=${params.matchedRouteId} event=${params.eventType} reason=${fallbackReason} error=${String(err)}`,
+    );
+    params.auditSink?.({
+      transport: "agent-callback",
+      category: "runtime-error",
+      messageId: extractMsgId(params.msg) ?? undefined,
+      summary: `passive reply failed routeId=${params.matchedRouteId} event=${params.eventType}`,
+      raw: {
+        transport: "agent-callback",
+        envelopeType: "xml",
+        body: params.msg,
+      },
+      error: `${fallbackReason}: ${String(err)}`,
+    });
+    params.res.statusCode = 200;
+    params.res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    params.res.end("success");
+    return {
+      fallbackToSuccess: true,
+      fallbackReason,
+      skipPostReplyHandler: false,
+    };
+  }
+}
+
 /**
  * 处理消息回调 (POST)
  */
@@ -471,11 +687,6 @@ async function handleMessageCallback(params: AgentWebhookParams): Promise<boolea
       `[wecom-agent] ${msgType} from=${fromUser} chatId=${chatId ?? "N/A"} msgId=${msgId ?? "N/A"} content=${preview}`,
     );
 
-    // 先返回 success (Agent 模式使用 API 发送回复，不用被动回复)
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("success");
-
     const decision = shouldProcessAgentInboundMessage({
       msgType,
       fromUser,
@@ -488,56 +699,107 @@ async function handleMessageCallback(params: AgentWebhookParams): Promise<boolea
       log?.(
         `[wecom-agent] skip processing: type=${msgType || "unknown"} event=${eventType || "N/A"} from=${fromUser || "N/A"} reason=${decision.reason}`,
       );
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("success");
       return true;
     }
 
-    const routedEvent = await routeAgentInboundEvent({
+    const resolvedRoute = resolveAgentInboundEventRoute({
       agent,
       msgType,
       eventType,
-      fromUser,
-      chatId,
       msg,
       log,
       auditSink,
     });
-    // 路由器返回文本时，先即时回包给用户/群，再决定是否进入默认 AI 流程
-    if (routedEvent.handled && routedEvent.replyText?.trim()) {
-      const replyContext = resolveAgentReplyTransportContext({
+
+    const passiveReplyHandler = resolvedRoute.matched
+      ? resolvedRoute.route?.replyHandler?.responseMode === "passive_reply"
+        ? resolvedRoute.route.replyHandler
+        : undefined
+      : undefined;
+
+    let routeProcessingEnabled = true;
+    let replyFallbackToSuccess = false;
+    let replyFallbackReason: string | undefined;
+    if (passiveReplyHandler && resolvedRoute.matchedRouteId) {
+      const passiveResult = await executePassiveReplyHandler({
         agent,
-        msg,
+        handler: passiveReplyHandler,
+        matchedRouteId: resolvedRoute.matchedRouteId,
+        eventType,
         fromUser,
         chatId,
+        msg,
+        timestamp,
+        nonce,
+        res,
         log,
         error,
+        auditSink,
       });
-      try {
-        if (replyContext.upstreamAgent && replyContext.primaryAgentForUpstream) {
-          await sendUpstreamAgentApiText({
-            upstreamAgent: replyContext.upstreamAgent,
-            primaryAgent: replyContext.primaryAgentForUpstream,
-            ...(replyContext.upstreamReplyTarget ?? replyContext.effectiveReplyTarget),
-            text: routedEvent.replyText,
-          });
-        } else {
-          await sendAgentApiText({
-            agent,
-            ...replyContext.effectiveReplyTarget,
-            text: routedEvent.replyText,
-          });
-        }
-        params.touchTransportSession?.({ lastOutboundAt: Date.now(), running: true });
-        log?.(
-          `[wecom-agent] event route reply delivered routeId=${routedEvent.matchedRouteId ?? "N/A"} to=${chatId ? `chat:${chatId}` : fromUser}`,
-        );
-      } catch (err) {
-        error?.(`[wecom-agent] event route reply failed: ${String(err)}`);
-      }
+      replyFallbackToSuccess = passiveResult.fallbackToSuccess;
+      replyFallbackReason = passiveResult.fallbackReason;
+      routeProcessingEnabled = !passiveResult.skipPostReplyHandler;
+    } else {
+      // 默认路径仍沿用旧行为：先回 success，再走异步/后处理逻辑
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("success");
     }
-    // routedEvent 已完全消费该事件时，终止后续默认处理链
-    if (routedEvent.handled && !routedEvent.chainToAgent) {
+
+    const shouldRunPostRoute =
+      routeProcessingEnabled && resolvedRoute.route?.postReplyHandler?.enabled === true;
+
+    if (shouldRunPostRoute) {
+      const routedEvent = await routeAgentInboundEvent({
+        agent,
+        msgType,
+        eventType,
+        fromUser,
+        chatId,
+        msg,
+        log,
+        auditSink,
+        resolvedRoute,
+        postReplyContext: passiveReplyHandler
+          ? {
+              sent: !replyFallbackToSuccess,
+              responseMode: "passive_reply",
+              fallbackToSuccess: replyFallbackToSuccess,
+              reason: replyFallbackReason ?? null,
+            }
+          : undefined,
+      });
+      // 路由器返回文本时，先即时回包给用户/群，再决定是否进入默认 AI 流程
+      if (routedEvent.handled && routedEvent.replyText?.trim()) {
+        try {
+          await deliverEventRouteReply({
+            agent,
+            msg,
+            fromUser,
+            chatId,
+            replyText: routedEvent.replyText,
+            matchedRouteId: routedEvent.matchedRouteId,
+            log,
+            error,
+            touchTransportSession: params.touchTransportSession,
+          });
+        } catch (err) {
+          error?.(`[wecom-agent] event route reply failed: ${String(err)}`);
+        }
+      }
+      // routedEvent 已完全消费该事件时，终止后续默认处理链
+      if (routedEvent.handled && !routedEvent.chainToAgent) {
+        log?.(
+          `[wecom-agent] event route handled routeId=${routedEvent.matchedRouteId ?? "N/A"} reason=${routedEvent.reason}`,
+        );
+        return true;
+      }
+    } else if (passiveReplyHandler) {
       log?.(
-        `[wecom-agent] event route handled routeId=${routedEvent.matchedRouteId ?? "N/A"} reason=${routedEvent.reason}`,
+        `[wecom-agent] passive reply completed without post route routeId=${resolvedRoute.matchedRouteId ?? "N/A"} fallback=${String(replyFallbackToSuccess)} reason=${replyFallbackReason ?? "N/A"}`,
       );
       return true;
     }

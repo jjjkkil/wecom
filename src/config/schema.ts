@@ -33,6 +33,18 @@ export interface AgentEventRouteHandlerScriptConfig {
   chainToAgent?: boolean;
 }
 
+export interface AgentReplyHandlerScriptConfig {
+  type: "node_script" | "python_script";
+  entry: string;
+  timeoutMs?: number;
+  responseMode?: "default" | "passive_reply";
+  allowSkipPostReplyHandler?: boolean;
+}
+
+export type AgentPostReplyHandlerScriptConfig = {
+  enabled?: boolean;
+} & AgentEventRouteHandlerConfig;
+
 export type AgentEventRouteHandlerConfig =
   | AgentEventRouteHandlerBuiltinConfig
   | AgentEventRouteHandlerScriptConfig;
@@ -40,7 +52,8 @@ export type AgentEventRouteHandlerConfig =
 export interface AgentEventRouteConfig {
   id?: string;
   when?: AgentEventRouteMatchConfig;
-  handler: AgentEventRouteHandlerConfig;
+  replyHandler?: AgentReplyHandlerScriptConfig;
+  postReplyHandler?: AgentPostReplyHandlerScriptConfig;
 }
 
 export interface AgentEventRoutingConfig {
