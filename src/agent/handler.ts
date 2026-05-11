@@ -214,19 +214,47 @@ export function shouldProcessAgentInboundMessage(params: {
     // 兼容旧行为：未配置 event 策略时，继续沿用历史白名单
     const compatibilityAllowedEvents = [
       "subscribe",
+      "unsubscribe",
       "enter_agent",
+      "location",
       "batch_job_result",
+      "change_contact",
+      // WeCom menu events
+      "click",
+      "view",
+      "view_miniprogram",
+      "scancode_push",
+      "scancode_waitmsg",
+      "pic_sysphoto",
+      "pic_photo_or_album",
+      "pic_weixin",
+      "location_select",
       // WeCom Doc events
+      "doc_change",
       "doc_create",
       "doc_delete",
       "doc_content_change",
       "doc_member_change",
       // WeCom Form events
       "wedoc_collect_submit",
-      // SmartSheet events
-      "smartsheet_record_change",
-      "smartsheet_field_change",
-      "smartsheet_view_change",
+      // SmartSheet events (official docs: Event=smart_sheet_change)
+      "smart_sheet_change",
+      // Approval events
+      "open_approval_change",
+      "sys_approval_change",
+      // Shared app events
+      "share_agent_change",
+      "share_chain_change",
+      // Template card events
+      "template_card_event",
+      "template_card_menu_event",
+      // App activity events
+      "inactive_alert",
+      "close_inactive_agent",
+      "reopen_inactive_agent",
+      "low_active_alert",
+      "low_active",
+      "active_restored",
     ];
     const configuredAllowedEvents = Array.isArray(params.allowedEventTypes)
       ? params.allowedEventTypes

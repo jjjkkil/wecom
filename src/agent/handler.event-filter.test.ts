@@ -31,6 +31,46 @@ describe("shouldProcessAgentInboundMessage", () => {
         expect(unknown.reason).toBe("event:some_random_event");
     });
 
+    it("allows official smart_sheet_change event in compatibility mode", () => {
+        const smartSheet = shouldProcessAgentInboundMessage({
+            msgType: "event",
+            eventType: "smart_sheet_change",
+            fromUser: "zhangsan",
+        });
+        expect(smartSheet.shouldProcess).toBe(true);
+        expect(smartSheet.reason).toBe("allowed_event:smart_sheet_change");
+    });
+
+    it("allows official doc_change event in compatibility mode", () => {
+        const docChange = shouldProcessAgentInboundMessage({
+            msgType: "event",
+            eventType: "doc_change",
+            fromUser: "zhangsan",
+        });
+        expect(docChange.shouldProcess).toBe(true);
+        expect(docChange.reason).toBe("allowed_event:doc_change");
+    });
+
+    it("allows additional official callback events in compatibility mode", () => {
+        const eventTypes = [
+            "unsubscribe",
+            "change_contact",
+            "template_card_menu_event",
+            "sys_approval_change",
+            "open_approval_change",
+            "inactive_alert",
+        ];
+        for (const eventType of eventTypes) {
+            const decision = shouldProcessAgentInboundMessage({
+                msgType: "event",
+                eventType,
+                fromUser: "zhangsan",
+            });
+            expect(decision.shouldProcess).toBe(true);
+            expect(decision.reason).toBe(`allowed_event:${eventType}`);
+        }
+    });
+
     it("blocks event processing when eventEnabled is false", () => {
         const disabled = shouldProcessAgentInboundMessage({
             msgType: "event",
