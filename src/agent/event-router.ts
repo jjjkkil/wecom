@@ -238,6 +238,7 @@ export async function routeAgentInboundEvent(params: {
     agent: params.agent,
     msgType: params.msgType,
     eventType: params.eventType,
+    fromUser: params.fromUser,
     msg: params.msg,
     log: params.log,
     auditSink: params.auditSink,

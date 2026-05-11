@@ -734,6 +734,7 @@ async function handleMessageCallback(params: AgentWebhookParams): Promise<boolea
       agent,
       msgType,
       eventType,
+      fromUser,
       msg,
       log,
       auditSink,
