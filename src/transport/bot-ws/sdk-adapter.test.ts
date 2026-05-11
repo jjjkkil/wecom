@@ -34,12 +34,28 @@ const sdkMockState = vi.hoisted(() => {
   };
 });
 
+const appMockState = vi.hoisted(() => ({
+  runtimes: new Map<string, any>(),
+  pushHandles: new Map<string, any>(),
+}));
+
 vi.mock("@wecom/aibot-node-sdk", () => ({
   default: {
     WSClient: sdkMockState.MockWSClient,
   },
   WSClient: sdkMockState.MockWSClient,
   generateReqId: (prefix: string) => `${prefix}-1`,
+}));
+
+vi.mock("../../app/index.js", () => ({
+  registerBotWsPushHandle: (accountId: string, handle: unknown) => {
+    appMockState.pushHandles.set(accountId, handle);
+  },
+  unregisterBotWsPushHandle: (accountId: string) => {
+    appMockState.pushHandles.delete(accountId);
+  },
+  getAccountRuntime: (accountId: string) => appMockState.runtimes.get(accountId),
+  getBotWsPushHandle: (accountId: string) => appMockState.pushHandles.get(accountId),
 }));
 
 import { BotWsSdkAdapter } from "./sdk-adapter.js";
@@ -59,6 +75,8 @@ describe("BotWsSdkAdapter", () => {
     process.off("unhandledRejection", onUnhandledRejection);
     unhandledRejections.length = 0;
     sdkMockState.client = null;
+    appMockState.runtimes.clear();
+    appMockState.pushHandles.clear();
   });
 
   it("contains frame handler rejections instead of leaking unhandled rejections", async () => {
@@ -181,6 +199,91 @@ describe("BotWsSdkAdapter", () => {
     );
     expect(log.info).toHaveBeenCalledWith(
       expect.stringContaining("static welcome delivered account=acc-1 messageId=msg-welcome"),
+    );
+    expect(unhandledRejections).toHaveLength(0);
+  });
+
+  it("dedupes fanout dispatch by message/session identity while source runtime continues handling", async () => {
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    const sourceRuntime = {
+      account: {
+        accountId: "acc-1",
+        bot: {
+          wsConfigured: true,
+          ws: {
+            botId: "bot-1",
+            secret: "secret-1",
+          },
+          config: {},
+        },
+      },
+      cfg: {
+        channels: {
+          wecom: {
+            routing: {
+              fanoutMentionsInGroup: true,
+              fanoutDedupeWindowMs: 60000,
+            },
+            accounts: {
+              "acc-1": {
+                name: "源机器人",
+                bot: { aibotid: "bot_1" },
+              },
+              "acc-2": {
+                name: "目标机器人",
+                bot: { aibotid: "bot_2" },
+              },
+            },
+          },
+        },
+      },
+      handleEvent: vi.fn().mockResolvedValue(undefined),
+      updateTransportSession: vi.fn(),
+      touchTransportSession: vi.fn(),
+      recordOperationalIssue: vi.fn(),
+    };
+    const targetHandleEvent = vi.fn().mockResolvedValue(undefined);
+    appMockState.runtimes.set("acc-2", {
+      account: {
+        bot: {
+          configured: true,
+          wsConfigured: true,
+        },
+      },
+      handleEvent: targetHandleEvent,
+    });
+
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    new BotWsSdkAdapter(sourceRuntime as any, log as any).start();
+
+    const duplicatedFrame = {
+      cmd: "aibot_msg_callback",
+      headers: { req_id: "req-fanout-1" },
+      body: {
+        msgid: "msg-fanout-1",
+        msgtype: "text",
+        chattype: "group",
+        chatid: "group-42",
+        from: { userid: "user-42" },
+        text: { content: "<@acc-2> hello" },
+      },
+    };
+
+    sdkMockState.client?.emit("message", duplicatedFrame);
+    sdkMockState.client?.emit("message", duplicatedFrame);
+
+    await waitForAsyncCallbacks();
+
+    expect(targetHandleEvent).toHaveBeenCalledTimes(1);
+    expect(sourceRuntime.handleEvent).toHaveBeenCalledTimes(2);
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("fanout dedupe hit sourceAccount=acc-1 targetAccount=acc-2"),
     );
     expect(unhandledRejections).toHaveLength(0);
   });

@@ -6,13 +6,114 @@ import AiBot, {
   type WsFrame,
 } from "@wecom/aibot-node-sdk";
 import type { WecomAccountRuntime } from "../../app/account-runtime.js";
-import { registerBotWsPushHandle, unregisterBotWsPushHandle } from "../../app/index.js";
+import {
+  registerBotWsPushHandle,
+  unregisterBotWsPushHandle,
+  getAccountRuntime,
+  getBotWsPushHandle,
+} from "../../app/index.js";
 import { clearWecomMcpAccountCache } from "../../capability/mcp/index.js";
-import type { RuntimeLogSink } from "../../types/index.js";
+import { toWeComMarkdownV2 } from "../../wecom_msg_adapter/markdown_adapter.js";
+import type { ReplyHandle, ReplyPayload, RuntimeLogSink } from "../../types/index.js";
+import {
+  buildFanoutDeliveryDedupeKey,
+  resolveFanoutEnabled,
+  resolveFanoutDedupeWindowMs,
+  extractMentionedAccountIds,
+  buildMentionAliasLookup,
+  summarizeTextForLog,
+} from "../../shared/mention-fanout-utils.js";
 import { mapBotWsFrameToInboundEvent } from "./inbound.js";
 import { uploadAndSendBotWsMedia } from "./media.js";
 import { createBotWsReplyHandle } from "./reply.js";
 import { createBotWsSessionSnapshot } from "./session.js";
+
+const fanoutDedupeSeenAt = new Map<string, number>();
+
+function shouldDispatchFanout(params: { key: string; ttlMs: number; now: number }): boolean {
+  const { key, ttlMs, now } = params;
+  for (const [existingKey, seenAt] of fanoutDedupeSeenAt.entries()) {
+    if (now - seenAt > ttlMs) {
+      fanoutDedupeSeenAt.delete(existingKey);
+    }
+  }
+  const previous = fanoutDedupeSeenAt.get(key);
+  if (typeof previous === "number" && now - previous <= ttlMs) {
+    return false;
+  }
+  fanoutDedupeSeenAt.set(key, now);
+  return true;
+}
+
+function createFanoutBotWsPushReplyHandle(params: {
+  accountId: string;
+  peerId: string;
+  sourceFrame: WsFrame<BaseMessage | EventMessage>;
+  sourceLog: RuntimeLogSink;
+}): ReplyHandle {
+  const { accountId, peerId, sourceFrame, sourceLog } = params;
+  const deliveredMediaUrls = new Set<string>();
+  let latestText = "";
+
+  return {
+    context: {
+      transport: "bot-ws",
+      accountId,
+      reqId: sourceFrame.headers.req_id,
+      raw: {
+        transport: "bot-ws",
+        command: sourceFrame.cmd,
+        headers: sourceFrame.headers,
+        body: sourceFrame.body,
+        envelopeType: "ws",
+      },
+    },
+    deliver: async (payload: ReplyPayload, info) => {
+      const push = getBotWsPushHandle(accountId);
+      if (!push) {
+        throw new Error(`fanout target account=${accountId} has no WS push handle`);
+      }
+      if (!push.isConnected()) {
+        throw new Error(`fanout target account=${accountId} WS push handle is disconnected`);
+      }
+
+      const incomingText = payload.text?.trim();
+      if (incomingText) {
+        latestText = incomingText;
+      }
+
+      // Suppress non-final text blocks to avoid duplicate active-push messages.
+      const finalText = info.kind === "final" ? (incomingText || latestText) : undefined;
+      if (finalText) {
+        await push.sendMarkdown(peerId, toWeComMarkdownV2(finalText));
+      }
+
+      const mediaUrls = [payload.mediaUrl, ...(payload.mediaUrls ?? [])]
+        .map((url) => String(url ?? "").trim())
+        .filter(Boolean)
+        .filter((url) => {
+          if (deliveredMediaUrls.has(url)) return false;
+          deliveredMediaUrls.add(url);
+          return true;
+        });
+
+      for (const mediaUrl of mediaUrls) {
+        const result = await push.sendMedia({
+          chatId: peerId,
+          mediaUrl,
+          text: finalText,
+        });
+        if (!result.ok) {
+          sourceLog.warn?.(
+            `[wecom-ws] fanout push media failed account=${accountId} peer=${peerId} media=${mediaUrl} reason=${result.rejectReason ?? result.error ?? "unknown"}`,
+          );
+        }
+      }
+    },
+    fail: async () => {},
+    markExternalActivity: () => {},
+  };
+}
 
 export class BotWsSdkAdapter {
   private client?: AiBot.WSClient;
@@ -250,6 +351,107 @@ export class BotWsSdkAdapter {
           `[wecom-ws] static welcome delivered account=${this.runtime.account.accountId} messageId=${event.messageId}`,
         );
         return;
+      }
+
+      // Handle group mention fanout for WS transport
+      let fanoutDispatchedCount = 0;
+      if (
+        resolveFanoutEnabled(this.runtime.cfg) &&
+        event.conversation.peerKind === "group" &&
+        event.inboundKind === "text"
+      ) {
+        const rawText = String(event.text ?? "");
+        const mentionLookup = buildMentionAliasLookup(this.runtime.cfg);
+        const allAccountIds = Array.from(new Set(mentionLookup.values()));
+        const mentionedAccountIds = extractMentionedAccountIds({ text: rawText, aliasToAccountId: mentionLookup })
+          .filter((accountId) => accountId !== this.runtime.account.accountId);
+
+        this.log.info?.(
+          `[wecom-ws] fanout: enabled=true sourceAccount=${this.runtime.account.accountId} groupChatId=${event.conversation.peerId} msgid=${String(event.messageId ?? "")} textPreview=${JSON.stringify(
+            summarizeTextForLog(rawText),
+          )} candidates=[${allAccountIds.join(",")}] extracted=[${mentionedAccountIds.join(",")}]`,
+        );
+
+        if (mentionedAccountIds.length === 0) {
+          this.log.info?.(
+            `[wecom-ws] fanout: no target accounts extracted from text; skip fanout`,
+          );
+        }
+
+        const fanoutDedupeWindowMs = resolveFanoutDedupeWindowMs(this.runtime.cfg);
+
+        for (const accountId of mentionedAccountIds) {
+          const dedupeKey = buildFanoutDeliveryDedupeKey({
+            sourceAccountId: this.runtime.account.accountId,
+            targetAccountId: accountId,
+            peerId: event.conversation.peerId,
+            senderId: event.conversation.senderId,
+            messageId: event.messageId,
+            reqId: frame.headers.req_id,
+          });
+          const shouldDispatch = shouldDispatchFanout({
+            key: dedupeKey,
+            ttlMs: fanoutDedupeWindowMs,
+            now: Date.now(),
+          });
+          if (!shouldDispatch) {
+            this.log.info?.(
+              `[wecom-ws] fanout dedupe hit sourceAccount=${this.runtime.account.accountId} targetAccount=${accountId} messageId=${String(event.messageId ?? "")} reqId=${String(frame.headers.req_id ?? "")}`,
+            );
+            continue;
+          }
+
+          const targetRuntime = getAccountRuntime(accountId);
+          const targetBot = targetRuntime?.account.bot;
+          if (!targetRuntime || !targetBot?.configured || !targetBot.wsConfigured) {
+            this.log.info?.(
+              `[wecom-ws] fanout: skip account=${accountId} reason=runtime_or_ws_not_ready`,
+            );
+            continue;
+          }
+
+          // Create a modified event for fanout target, with annotated messageId
+          const fanoutMessageId = event.messageId
+            ? `${String(event.messageId)}#fanout:${accountId}`
+            : `fanout:${accountId}:${generateReqId("msg")}`;
+
+          const fanoutEvent = {
+            ...event,
+            accountId,
+            messageId: fanoutMessageId,
+          };
+
+          // Fanout replies must use target account's own WS push handle,
+          // not the source frame req_id, otherwise identity and routing are mixed.
+          const fanoutReplyHandle = createFanoutBotWsPushReplyHandle({
+            accountId,
+            peerId: event.conversation.peerId,
+            sourceFrame: frame,
+            sourceLog: this.log,
+          });
+
+          // Dispatch to fanout target
+          targetRuntime
+            .handleEvent(fanoutEvent, fanoutReplyHandle)
+            .catch((err) => {
+              this.log.error?.(
+                `[wecom-ws] fanout dispatch failed account=${accountId} error=${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
+
+          this.log.info?.(
+            `[wecom-ws] fanout: sourceAccount=${this.runtime.account.accountId} -> account=${accountId} messageId=${fanoutMessageId}`,
+          );
+          fanoutDispatchedCount += 1;
+        }
+
+        this.log.info?.(
+          `[wecom-ws] fanout: completed sourceAccount=${this.runtime.account.accountId} dispatched=${fanoutDispatchedCount}`,
+        );
+      } else if (event.conversation.peerKind === "group" && event.inboundKind === "text") {
+        this.log.info?.(
+          `[wecom-ws] fanout: bypassed enabled=${String(resolveFanoutEnabled(this.runtime.cfg))} sourceAccount=${this.runtime.account.accountId}`,
+        );
       }
 
       await this.runtime.handleEvent(event, replyHandle);
