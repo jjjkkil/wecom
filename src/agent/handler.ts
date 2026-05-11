@@ -243,16 +243,13 @@ export function shouldProcessAgentInboundMessage(params: {
       };
     }
 
-    // 配置存在时：历史白名单 + 配置白名单并集，保证平滑迁移
+    // 配置存在时：仅使用配置白名单（严格模式）
     const allowedEvents = hasEventConfig
-      ? Array.from(new Set([...compatibilityAllowedEvents, ...configuredAllowedEvents]))
+      ? Array.from(new Set(configuredAllowedEvents))
       : compatibilityAllowedEvents;
 
     if (
-      allowedEvents.includes(eventType) ||
-      eventType.startsWith("doc_") ||
-      eventType.startsWith("wedoc_") ||
-      eventType.startsWith("smartsheet_")
+      allowedEvents.includes(eventType) 
     ) {
       return {
         shouldProcess: true,

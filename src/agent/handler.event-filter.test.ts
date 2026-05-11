@@ -54,6 +54,18 @@ describe("shouldProcessAgentInboundMessage", () => {
         expect(custom.reason).toBe("allowed_event:click");
     });
 
+    it("does not allow compatibility events when strict config is present", () => {
+        const docEvent = shouldProcessAgentInboundMessage({
+            msgType: "event",
+            eventType: "doc_content_change",
+            fromUser: "zhangsan",
+            eventEnabled: true,
+            allowedEventTypes: ["click"],
+        });
+        expect(docEvent.shouldProcess).toBe(false);
+        expect(docEvent.reason).toBe("event:doc_content_change");
+    });
+
     it("normalizes configured event type values before matching", () => {
         const custom = shouldProcessAgentInboundMessage({
             msgType: "event",
