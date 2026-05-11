@@ -459,7 +459,7 @@ openclaw plugins enable wecom
 
 - `upstreamCorps` 只解决“发给哪个下游企业”的问题，不替代主企业应用本身的授权配置
 - 上下游企业需要先在企业微信后台完成应用共享，并确保应用已加入“可调用接口的应用”
-- 如果你只是想快速看完整字段说明、接口映射和日志样例，可以直接看 [UPSTREAM_CONFIG.md](./UPSTREAM_CONFIG.md)
+- 如果你只是想快速看完整字段说明、接口映射和日志样例，可以直接看 [UPSTREAM_CONFIG.md](./docs/UPSTREAM_CONFIG.md)
 
 ---
 
